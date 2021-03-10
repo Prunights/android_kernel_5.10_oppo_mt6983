@@ -503,9 +503,16 @@ void rose_rt_device_down(struct net_device *dev)
 
 				t->count--;
 
-				memmove(&t->neighbour[i], &t->neighbour[i + 1],
-					sizeof(t->neighbour[0]) *
-						(t->count - i));
+				switch (i) {
+				case 0:
+					t->neighbour[0] = t->neighbour[1];
+					fallthrough;
+				case 1:
+					t->neighbour[1] = t->neighbour[2];
+					break;
+				case 2:
+					break;
+				}
 			}
 
 			if (t->count <= 0)
