@@ -631,13 +631,11 @@ create_child:
 			if (!owner)
 				goto dispose_child;
 
-			if (!subflow_hmac_valid(req, &mp_opt)) {
+			if (!subflow_hmac_valid(req, &mp_opt) ||
+			    !mptcp_can_accept_new_subflow(subflow_req->msk)) {
 				SUBFLOW_REQ_INC_STATS(req, MPTCP_MIB_JOINACKMAC);
 				goto dispose_child;
 			}
-
-			if (!mptcp_can_accept_new_subflow(owner))
-				goto dispose_child;
 
 			/* move the msk reference ownership to the subflow */
 			subflow_req->msk = NULL;
