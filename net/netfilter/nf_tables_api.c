@@ -1299,7 +1299,6 @@ static int nf_tables_newtable(struct net *net, struct sock *nlsk,
 	INIT_LIST_HEAD(&table->sets);
 	INIT_LIST_HEAD(&table->objects);
 	INIT_LIST_HEAD(&table->flowtables);
-	write_pnet(&table->net, net);
 	table->family = family;
 	table->flags = flags;
 	table->handle = ++table_handle;
@@ -3348,7 +3347,7 @@ void nf_tables_rule_destroy(const struct nft_ctx *ctx, struct nft_rule *rule)
 /* can only be used if rule is no longer visible to dumps */
 static void nf_tables_rule_release(const struct nft_ctx *ctx, struct nft_rule *rule)
 {
-	WARN_ON_ONCE(!lockdep_commit_lock_is_held(ctx->net));
+	lockdep_commit_lock_is_held(ctx->net);
 
 	nft_rule_expr_deactivate(ctx, rule, NFT_TRANS_RELEASE);
 	nf_tables_rule_destroy(ctx, rule);
@@ -4861,7 +4860,7 @@ void nf_tables_deactivate_set(const struct nft_ctx *ctx, struct nft_set *set,
 			      struct nft_set_binding *binding,
 			      enum nft_trans_phase phase)
 {
-	WARN_ON_ONCE(!lockdep_commit_lock_is_held(ctx->net));
+	lockdep_commit_lock_is_held(ctx->net);
 
 	switch (phase) {
 	case NFT_TRANS_PREPARE_ERROR:
@@ -9576,19 +9575,6 @@ static void __nft_release_basechain_now(struct nft_ctx *ctx)
 	nf_tables_chain_destroy(ctx->chain);
 }
 
-static void nft_release_basechain_rcu(struct rcu_head *head)
-{
-	struct nft_chain *chain = container_of(head, struct nft_chain, rcu_head);
-	struct nft_ctx ctx = {
-		.family	= chain->table->family,
-		.chain	= chain,
-		.net	= read_pnet(&chain->table->net),
-	};
-
-	__nft_release_basechain_now(&ctx);
-	put_net(ctx.net);
-}
-
 int __nft_release_basechain(struct nft_ctx *ctx)
 {
 	struct nft_rule *rule;
@@ -9602,11 +9588,6 @@ int __nft_release_basechain(struct nft_ctx *ctx)
 
 	nft_chain_del(ctx->chain);
 	nft_use_dec(&ctx->table->use);
-
-	if (maybe_get_net(ctx->net))
-		call_rcu(&ctx->chain->rcu_head, nft_release_basechain_rcu);
-	else
-		__nft_release_basechain_now(ctx);
 
 	if (!maybe_get_net(ctx->net)) {
 		__nft_release_basechain_now(ctx);
