@@ -9588,6 +9588,7 @@ int __nft_release_basechain(struct nft_ctx *ctx)
 
 	nft_chain_del(ctx->chain);
 	nft_use_dec(&ctx->table->use);
+	nf_tables_chain_destroy(ctx->chain);
 
 	if (!maybe_get_net(ctx->net)) {
 		__nft_release_basechain_now(ctx);
