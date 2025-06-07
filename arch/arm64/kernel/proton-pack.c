@@ -1006,6 +1006,71 @@ static void this_cpu_set_vectors(enum arm64_bp_harden_el1_vectors slot)
 	isb();
 }
 
+#ifdef CONFIG_KVM
+static int kvm_bhb_get_vecs_size(const char *start)
+{
+	if (start == __smccc_workaround_3_smc)
+		return __SMCCC_WORKAROUND_3_SMC_SZ;
+	else if (start == __spectre_bhb_loop_k8 ||
+		 start == __spectre_bhb_loop_k24 ||
+		 start == __spectre_bhb_loop_k32)
+		return __SPECTRE_BHB_LOOP_SZ;
+	else if (start == __spectre_bhb_clearbhb)
+		return __SPECTRE_BHB_CLEARBHB_SZ;
+
+	return 0;
+}
+
+static void kvm_setup_bhb_slot(const char *hyp_vecs_start)
+{
+	int cpu, slot = -1, size;
+	const char *hyp_vecs_end;
+
+	if (!IS_ENABLED(CONFIG_KVM) || !is_hyp_mode_available())
+		return;
+
+	size = kvm_bhb_get_vecs_size(hyp_vecs_start);
+	if (WARN_ON_ONCE(!hyp_vecs_start || !size))
+		return;
+	hyp_vecs_end = hyp_vecs_start + size;
+
+	raw_spin_lock(&bp_lock);
+	for_each_possible_cpu(cpu) {
+		if (per_cpu(bp_hardening_data.template_start, cpu) == hyp_vecs_start) {
+			slot = per_cpu(bp_hardening_data.hyp_vectors_slot, cpu);
+			break;
+		}
+	}
+
+	if (slot == -1) {
+		slot = atomic_inc_return(&arm64_el2_vector_last_slot);
+		BUG_ON(slot >= BP_HARDEN_EL2_SLOTS);
+		__copy_hyp_vect_bpi(slot, hyp_vecs_start, hyp_vecs_end);
+	}
+
+	__this_cpu_write(bp_hardening_data.hyp_vectors_slot, slot);
+	__this_cpu_write(bp_hardening_data.template_start, hyp_vecs_start);
+	raw_spin_unlock(&bp_lock);
+}
+#else
+#define __smccc_workaround_3_smc NULL
+#define __spectre_bhb_loop_k8 NULL
+#define __spectre_bhb_loop_k24 NULL
+#define __spectre_bhb_loop_k32 NULL
+#define __spectre_bhb_clearbhb NULL
+
+static void kvm_setup_bhb_slot(const char *hyp_vecs_start) { }
+#endif /* CONFIG_KVM */
+
+static bool spectre_bhb_fw_mitigated;
+static bool __read_mostly __nospectre_bhb;
+static int __init parse_spectre_bhb_param(char *str)
+{
+	__nospectre_bhb = true;
+	return 0;
+}
+early_param("nospectre_bhb", parse_spectre_bhb_param);
+
 void spectre_bhb_enable_mitigation(const struct arm64_cpu_capabilities *entry)
 {
 	bp_hardening_cb_t cpu_cb;
@@ -1019,7 +1084,7 @@ void spectre_bhb_enable_mitigation(const struct arm64_cpu_capabilities *entry)
 		/* No point mitigating Spectre-BHB alone. */
 	} else if (!IS_ENABLED(CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY)) {
 		pr_info_once("spectre-bhb mitigation disabled by compile time option\n");
-	} else if (cpu_mitigations_off()) {
+	} else if (cpu_mitigations_off() || __nospectre_bhb) {
 		pr_info_once("spectre-bhb mitigation disabled by command line option\n");
 	} else if (supports_ecbhb(SCOPE_LOCAL_CPU)) {
 		state = SPECTRE_MITIGATED;
