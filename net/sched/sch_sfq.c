@@ -671,18 +671,11 @@ static int sfq_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	sch_tree_lock(sch);
-
-	limit = q->limit;
-	divisor = q->divisor;
-	headdrop = q->headdrop;
-	maxdepth = q->maxdepth;
-	maxflows = q->maxflows;
-	quantum = q->quantum;
-	flags = q->flags;
-
-	/* update and validate configuration */
-	if (ctl->quantum)
-		quantum = ctl->quantum;
+	if (ctl->quantum) {
+		q->quantum = ctl->quantum;
+		q->scaled_quantum = SFQ_ALLOT_SIZE(q->quantum);
+	}
+	WRITE_ONCE(q->perturb_period, ctl->perturb_period * HZ);
 	if (ctl->flows)
 		maxflows = min_t(u32, ctl->flows, SFQ_MAX_FLOWS);
 	if (ctl->divisor) {
