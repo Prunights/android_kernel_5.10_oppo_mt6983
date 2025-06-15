@@ -653,14 +653,6 @@ static int sfq_change(struct Qdisc *sch, struct nlattr *opt,
 		NL_SET_ERR_MSG_MOD(extack, "invalid quantum");
 		return -EINVAL;
 	}
-
-	if (ctl->perturb_period < 0 ||
-	    ctl->perturb_period > INT_MAX / HZ) {
-		NL_SET_ERR_MSG_MOD(extack, "invalid perturb period");
-		return -EINVAL;
-	}
-	perturb_period = ctl->perturb_period * HZ;
-
 	if (ctl_v1 && !red_check_params(ctl_v1->qth_min, ctl_v1->qth_max,
 					ctl_v1->Wlog, ctl_v1->Scell_log, NULL))
 		return -EINVAL;
@@ -671,10 +663,8 @@ static int sfq_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 
 	sch_tree_lock(sch);
-	if (ctl->quantum) {
+	if (ctl->quantum)
 		q->quantum = ctl->quantum;
-		q->scaled_quantum = SFQ_ALLOT_SIZE(q->quantum);
-	}
 	WRITE_ONCE(q->perturb_period, ctl->perturb_period * HZ);
 	if (ctl->flows)
 		maxflows = min_t(u32, ctl->flows, SFQ_MAX_FLOWS);
