@@ -700,7 +700,7 @@ static int ets_qdisc_change(struct Qdisc *sch, struct nlattr *opt,
 	for (i = q->nbands; i < oldbands; i++) {
 		qdisc_put(q->classes[i].qdisc);
 		q->classes[i].qdisc = NULL;
-		WRITE_ONCE(q->classes[i].quantum, 0);
+		q->classes[i].quantum = 0;
 		q->classes[i].deficit = 0;
 		memset(&q->classes[i].bstats, 0, sizeof(q->classes[i].bstats));
 		memset(&q->classes[i].qstats, 0, sizeof(q->classes[i].qstats));
