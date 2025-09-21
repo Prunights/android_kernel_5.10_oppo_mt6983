@@ -82,6 +82,9 @@ static int rfkill_gpio_probe(struct platform_device *pdev)
 	const char *name_property;
 	const char *type_property;
 	struct gpio_desc *gpio;
+	const char *name_property;
+	const char *type_property;
+	const char *type_name;
 	int ret;
 
 	rfkill = devm_kzalloc(&pdev->dev, sizeof(*rfkill), GFP_KERNEL);
