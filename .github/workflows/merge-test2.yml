@@ -54,6 +54,8 @@ jobs:
           git checkout -B lts-test "${{ inputs.base_tag }}"
           git read-tree "$OPPO_TREE"
           git commit -q -m "vendor snapshot (${{ inputs.target }}) on clean ${{ inputs.base_tag }}"
+          git reset --hard HEAD
+          git clean -fdq
 
           set +e
           git merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
