@@ -1,0 +1,270 @@
+name: Apply Final Resolution
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        default: 'n2f-272'
+      base_tag:
+        default: 'v5.10.236'
+      upstream_tag:
+        default: 'v5.10.272'
+
+jobs:
+  apply:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target }}
+
+      - name: vendor tree
+        id: v
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> $GITHUB_OUTPUT
+
+      - name: fetch upstream
+        run: |
+          git remote add upstream https://github.com/gregkh/linux.git || true
+          git fetch --no-tags upstream "refs/tags/${{ inputs.base_tag }}:refs/tags/${{ inputs.base_tag }}" "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+
+      - name: fabricate base and merge
+        run: |
+          git config user.email ci@local
+          git config user.name ci
+          git checkout -B lts-final "${{ inputs.base_tag }}"
+          git read-tree "${{ steps.v.outputs.tree }}"
+          git commit -q -m "vendor snapshot on ${{ inputs.base_tag }}"
+          git reset --hard HEAD && git clean -fdq
+          set +e
+          git -c merge.conflictStyle=diff3 merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
+          set -e
+          git checkout --conflict=diff3 -- . 2>/dev/null || true
+          echo "initial conflicts: $(git diff --name-only --diff-filter=U | wc -l)"
+
+      - name: write decisions
+        run: |
+          cat > decisions.tsv <<'TSVDATA'
+          path	idx	decision	reason
+          drivers/base/power/domain_governor.c	0	T	上游重写 CPU constraint 逻辑，我方是旧版
+          drivers/base/property.c	0	T	两边几乎一致，取上游新版
+          drivers/base/regmap/regmap.c	0	T	上游 bulk read/write 初始化修复，我方是旧代码
+          drivers/cpufreq/scmi-cpufreq.c	0	T	上游加 policy NULL 保护
+          drivers/cpufreq/scmi-cpufreq.c	1	T	同上，配套改动
+          drivers/hwmon/max16065.c	0	T	上游加 READ_ONCE，纯 bugfix
+          drivers/hwmon/max16065.c	1	T	上游合并 UV/OV alarm，纯 bugfix
+          drivers/i2c/busses/i2c-mt65xx.c	0	OT	我方加 MTK 变量 + 上游加 write_then_read，并集
+          drivers/remoteproc/remoteproc_core.c	0	O	我方新增 rproc_set_firmware 文档注释
+          drivers/remoteproc/remoteproc_core.c	1	O	我方加 rproc_recovery_wq 判空，比上游健壮
+          drivers/remoteproc/remoteproc_core.c	2	T	上游补 alloc 失败 return -ENOMEM
+          drivers/remoteproc/remoteproc_core.c	3	O	我方 destroy 前判空
+          drivers/scsi/scsi_error.c	0	T	上游新增 busy 计数变量
+          drivers/scsi/scsi_error.c	1	T	上游修 eh wakeup 竞态
+          drivers/scsi/ufs/ufshcd.c	0	T	上游加 pm_op_in_progress 保护
+          drivers/scsi/ufs/ufshcd.c	1	O	保厂商 UFS reset 状态机，记录丢弃上游 block_requests
+          drivers/usb/gadget/function/u_audio.c	0	O	我方 395 行厂商大改，不能覆盖
+          drivers/usb/gadget/function/u_audio.c	1	O	同上，配套 free 流程
+          drivers/usb/typec/tcpm/tcpci_maxim.c	0	T	上游补日志换行
+          drivers/usb/typec/ucsi/ucsi.c	0	T	上游加 prev_role 跟踪
+          include/linux/blk_types.h	0	O	REQ_OP 枚举值必须整体对齐，保厂商 DEVICE_COPY=18
+          include/linux/device.h	0	OT	android_kabi.h 与 cleanup.h 都要
+          include/linux/device.h	1	O	ANDROID_KABI_RESERVE 不能换成上游新字段，否则破 GKI ABI
+          include/linux/font.h	0	T	上游同时改类型并加 charcount，取上游即包含我方改动
+          include/linux/hugetlb.h	0	T	上游声明含我方那条
+          include/linux/hugetlb.h	1	T	同上
+          include/linux/irqdomain.h	0	O	保 GENKSYMS hack，丢上游 struct irq_domain_info
+          include/linux/mmc/host.h	0	O	KABI reserve 优先，MTK 不用 SD Express
+          include/linux/mutex.h	0	OT	android_vendor.h 与 cleanup.h 都要
+          include/linux/regulator/driver.h	0	O	KABI reserve 优先，丢上游 last_off 类型调整
+          include/linux/usb/usbnet.h	0	O	KABI reserve 优先
+          include/net/bluetooth/hci_core.h	0	OT	android_kabi.h 与 srcu.h 都要
+          include/net/sock.h	0	O	KABI reserve 优先，保 sk_peer_lock
+          net/ipv4/ah4.c	0	T	上游 xfrm_output_resume 加 skb_to_full_sk
+          net/ipv4/esp4.c	0	T	上游 ESP-in-TCP 错误处理修复
+          net/ipv6/ah6.c	0	T	同 ah4
+          net/ipv6/esp6.c	0	T	同 esp4
+          net/ipv6/xfrm6_policy.c	0	T	上游修 saddr 取值
+          mm/Kconfig	0	OT	我方 OPLUS_FEATURE_PERFORMANCE_MM 与上游 KMAP_LOCAL 并存
+          mm/hugetlb.c	0	T	我方为空，上游新增 huge_pmd_unshare_flush
+          mm/hugetlb.c	1	T	上游 hugetlb_unshare_pmds 带 take_locks，更完整
+          mm/khugepaged.c	0	OT	我方 vm_write_begin 与上游 anon_vma 复查并存
+          mm/ksm.c	0	T	上游改 put_page，修引用计数
+          mm/ksm.c	1	T	同上配套
+          mm/mmap.c	0	OT	我方 CONT_PTE_HUGEPAGE 与上游 split 注释并存
+          mm/mmap.c	1	OT	我方 #endif 与上游 hugetlb_split 并存
+          mm/slub.c	0	T	上游加 check_valid_pointer 校验
+          mm/zsmalloc.c	0	O	保 MTK 的 __GFP_CMA 标志，丢上游 zalloc
+          fs/proc/fd.c	0	T	上游改用 fget_task 遍历
+          fs/proc/fd.c	1	T	同上，修 fd 信息泄露
+          kernel/audit_fsnotify.c	0	T	上游修 inode→dir 传参
+          kernel/cgroup/cgroup.c	0	T	上游用 INIT_WORK 替换手写 pending bit
+          kernel/time/posix-timers.c	0	T	上游加 cond_resched 与 -EAGAIN 返回
+          fs/f2fs/data.c	0	O	f2fs 整体保厂商
+          fs/f2fs/file.c	0	O	f2fs 整体保厂商
+          fs/f2fs/file.c	1	O	f2fs 整体保厂商
+          fs/f2fs/file.c	2	O	f2fs 整体保厂商
+          fs/f2fs/file.c	3	O	f2fs 整体保厂商
+          fs/f2fs/file.c	4	O	f2fs 整体保厂商
+          fs/f2fs/file.c	5	O	f2fs 整体保厂商
+          fs/f2fs/segment.c	0	O	f2fs 整体保厂商
+          fs/f2fs/super.c	0	O	f2fs 整体保厂商
+          fs/f2fs/super.c	1	O	f2fs 整体保厂商
+          fs/f2fs/super.c	2	O	f2fs 整体保厂商，丢上游 xattr cache
+          fs/f2fs/super.c	3	O	f2fs 整体保厂商，丢上游 xattr cache
+          fs/f2fs/sysfs.c	0	O	f2fs 整体保厂商
+          fs/f2fs/sysfs.c	1	O	f2fs 整体保厂商
+          fs/f2fs/sysfs.c	2	O	f2fs 整体保厂商
+          fs/f2fs/sysfs.c	3	O	f2fs 整体保厂商
+          block/blk-settings.c	0	O	保 DEVICE_XCOPY 的 kabi_res 用法
+          arch/arm64/kernel/cpufeature.c	0	OT	我方 MTE 初始化与上游 zero-page 修复并存
+          arch/arm64/kernel/cpufeature.c	1	OT	同上
+          arch/arm64/kernel/proton-pack.c	0	O	保厂商已验证的 BHB 缓解逻辑
+          arch/arm64/kernel/proton-pack.c	1	O	同上
+          arch/arm64/kernel/proton-pack.c	2	O	同上
+          arch/arm64/kernel/proton-pack.c	3	O	同上
+          arch/arm64/kernel/proton-pack.c	4	O	同上
+          arch/arm64/kernel/proton-pack.c	5	O	同上
+TSVDATA
+          cat > theirs.txt <<'THEIRSDATA'
+          drivers/mmc/host/sdhci.c
+          
+          drivers/scsi/scsi_lib.c
+          
+          drivers/tty/serial/max310x.c
+          
+          drivers/usb/host/xhci-hub.c
+          
+          fs/coredump.c
+          
+          include/linux/binfmts.h
+          
+          include/linux/pid.h
+          
+          include/linux/remoteproc.h
+          
+          kernel/bpf/cgroup.c
+          
+          net/ipv6/ip6_tunnel.c
+          
+          security/security.c
+          
+THEIRSDATA
+          cat > ours.txt <<'OURSDATA'
+          drivers/base/platform.c
+          
+          drivers/firmware/efi/mokvar-table.c
+          
+          drivers/usb/host/xhci-ring.c
+          
+          fs/f2fs/f2fs.h
+          
+          fs/fs-writeback.c
+          
+          include/net/inet_connection_sock.h
+          
+          net/ipv4/sysctl_net_ipv4.c
+          
+OURSDATA
+          echo "decisions: $(($(wc -l < decisions.tsv)-1))"
+
+      - name: apply whole-file policy
+        run: |
+          sed -i '/^\s*$/d' theirs.txt ours.txt
+          xargs -a theirs.txt git checkout --theirs -- 2>/dev/null || true
+          xargs -a theirs.txt git add -- 2>/dev/null || true
+          xargs -a ours.txt git checkout --ours -- 2>/dev/null || true
+          xargs -a ours.txt git add -- 2>/dev/null || true
+
+      - name: apply block decisions
+        run: |
+          python3 - <<'PYCODE'
+          import os
+          dec = {}
+          for line in open('decisions.tsv'):
+              p = line.rstrip('\n').split('\t')
+              if len(p) >= 3 and p[0] != 'path':
+                  dec[(p[0], int(p[1]))] = p[2]
+          files = sorted(set(k[0] for k in dec))
+          resolved = 0
+          failed = []
+          for path in files:
+              if not os.path.isfile(path):
+                  continue
+              data = open(path, encoding='utf-8', errors='surrogateescape').read()
+              lines = data.split('\n')
+              out = []
+              i = 0
+              idx = 0
+              ok = True
+              while i < len(lines):
+                  if lines[i].startswith('<<<<<<< '):
+                      o = []; b = []; t = []
+                      i += 1
+                      while i < len(lines) and not lines[i].startswith('||||||| '):
+                          o.append(lines[i]); i += 1
+                      i += 1
+                      while i < len(lines) and not lines[i].startswith('======='):
+                          b.append(lines[i]); i += 1
+                      i += 1
+                      while i < len(lines) and not lines[i].startswith('>>>>>>> '):
+                          t.append(lines[i]); i += 1
+                      i += 1
+                      d = dec.get((path, idx))
+                      if d == 'O':
+                          out.extend(o)
+                      elif d == 'T':
+                          out.extend(t)
+                      elif d == 'OT':
+                          out.extend(o); out.extend(t)
+                      elif d == 'TO':
+                          out.extend(t); out.extend(o)
+                      else:
+                          out.append('<<<<<<< ours'); out.extend(o)
+                          out.append('||||||| base'); out.extend(b)
+                          out.append('======='); out.extend(t)
+                          out.append('>>>>>>> theirs')
+                          ok = False
+                      idx += 1
+                  else:
+                      out.append(lines[i]); i += 1
+              if ok:
+                  open(path, 'w', encoding='utf-8', errors='surrogateescape').write('\n'.join(out))
+                  resolved += 1
+              else:
+                  failed.append(path)
+          print('resolved files: %d, pending: %d' % (resolved, len(failed)))
+          for f in failed:
+              print('  pending:', f)
+PYCODE
+          git diff --name-only --diff-filter=U | sort > unresolved.txt || true
+          echo "=== remaining conflicts ==="
+          wc -l < unresolved.txt
+          cat unresolved.txt
+
+      - name: commit if zero
+        run: |
+          N=$(git diff --name-only --diff-filter=U | wc -l)
+          echo "remaining=$N"
+          if [ "$N" -eq 0 ]; then
+            git add -A
+            git commit -q -m "merge: Linux 5.10.272 into OPPO mt6983 vendor tree (base 236, 78 block decisions)"
+            git branch -f lts-272 HEAD
+            git push -f origin lts-272
+            echo "PUSHED lts-272"
+            git log -1 --format='%H %s'
+            git diff --shortstat HEAD~1 HEAD || true
+          else
+            echo "not committed, $N conflicts left"
+          fi
+
+      - name: publish
+        if: always()
+        run: |
+          mkdir -p /tmp/res
+          for f in unresolved.txt decisions.tsv merge.log; do [ -f "$f" ] && cp "$f" /tmp/res/; done
+          cd /tmp/res && git init -q . && git config user.email ci@local && git config user.name ci
+          git add -A && git commit -q -m "apply final $(date -u +%FT%TZ)" || true
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-final
