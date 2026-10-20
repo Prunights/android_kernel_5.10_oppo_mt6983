@@ -1,0 +1,149 @@
+name: Resolve Pass 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        default: 'n2f-272'
+      base_tag:
+        default: 'v5.10.236'
+      upstream_tag:
+        default: 'v5.10.272'
+
+jobs:
+  resolve:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target }}
+
+      - name: 记录 vendor 树
+        id: v
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> $GITHUB_OUTPUT
+
+      - name: 拉上游
+        run: |
+          git remote add upstream https://github.com/gregkh/linux.git || true
+          git fetch --no-tags upstream "refs/tags/${{ inputs.base_tag }}:refs/tags/${{ inputs.base_tag }}" "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+
+      - name: 造快照并合并(diff3 风格)
+        run: |
+          git config user.email ci@local
+          git config user.name ci
+          git checkout -B lts-test "${{ inputs.base_tag }}"
+          git read-tree "${{ steps.v.outputs.tree }}"
+          git commit -q -m "vendor snapshot on ${{ inputs.base_tag }}"
+          git reset --hard HEAD && git clean -fdq
+          set +e
+          git -c merge.conflictStyle=diff3 merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
+          set -e
+          echo "初始冲突: $(git diff --name-only --diff-filter=U | wc -l)"
+
+      - name: 第一层政策(整文件取一边)
+        run: |
+          THEIRS="fs/nfsd fs/lockd fs/notify net/sunrpc net/bluetooth net/core net/xfrm net/netfilter arch/x86 Documentation"
+          git diff --name-only --diff-filter=U -- $THEIRS > t1.txt 2>/dev/null || true
+          [ -s t1.txt ] && xargs -a t1.txt git checkout --theirs -- 2>/dev/null || true
+          [ -s t1.txt ] && xargs -a t1.txt git add -- 2>/dev/null || true
+
+          OURS="drivers/dma/mediatek drivers/i2c/busses/i2c-mt65xx drivers/media/platform/mtk-vcodec drivers/usb/typec/tcpm/tcpm.c"
+          git diff --name-only --diff-filter=U -- $OURS > t2.txt 2>/dev/null || true
+          [ -s t2.txt ] && xargs -a t2.txt git checkout --ours -- 2>/dev/null || true
+          [ -s t2.txt ] && xargs -a t2.txt git add -- 2>/dev/null || true
+          echo "第一层处理后剩余: $(git diff --name-only --diff-filter=U | wc -l)"
+
+      - name: 第二层 逐段自动判定(我方未改的段取上游)
+        run: |
+          git diff --name-only --diff-filter=U | sort > left.txt
+          python3 - <<'PY'
+          import os
+          files=[l.strip() for l in open('left.txt') if l.strip()]
+          tot_auto=tot_manual=0
+          still=[]
+          for p in files:
+              if not os.path.isfile(p):
+                  still.append(p); continue
+              data=open(p,encoding='utf-8',errors='surrogateescape').read()
+              lines=data.split('\n')
+              out=[]; i=0; auto=0; manual=0
+              while i < len(lines):
+                  if lines[i].startswith('<<<<<<< '):
+                      ours=[];base=[];theirs=[]
+                      i+=1
+                      while i<len(lines) and not lines[i].startswith('||||||| '):
+                          ours.append(lines[i]); i+=1
+                      i+=1
+                      while i<len(lines) and not lines[i].startswith('======='):
+                          base.append(lines[i]); i+=1
+                      i+=1
+                      while i<len(lines) and not lines[i].startswith('>>>>>>> '):
+                          theirs.append(lines[i]); i+=1
+                      i+=1
+                      if ours==base:
+                          out.extend(theirs); auto+=1
+                      elif theirs==base:
+                          out.extend(ours); auto+=1
+                      else:
+                          out.append('<<<<<<< ours'); out.extend(ours)
+                          out.append('||||||| base'); out.extend(base)
+                          out.append('======='); out.extend(theirs)
+                          out.append('>>>>>>> theirs')
+                          manual+=1
+                  else:
+                      out.append(lines[i]); i+=1
+              if auto:
+                  open(p,'w',encoding='utf-8',errors='surrogateescape').write('\n'.join(out))
+              tot_auto+=auto; tot_manual+=manual
+              if manual:
+                  still.append(p)
+          open('still.txt','w').write('\n'.join(still)+('\n' if still else ''))
+          print(f'自动解决冲突段: {tot_auto}  仍需人工: {tot_manual} 段, 涉及 {len(still)} 个文件')
+          PY
+          # 自动解决完且无残留标记的文件标记为已解决
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            if ! grep -qE '^(<<<<<<< |>>>>>>> )' "$f" 2>/dev/null; then
+              git add -- "$f" 2>/dev/null || true
+            fi
+          done < left.txt
+          echo "=== 剩余未解决 ==="
+          git diff --name-only --diff-filter=U | sort > unresolved.txt || true
+          wc -l < unresolved.txt
+          cat unresolved.txt
+
+      - name: 导出剩余冲突正文
+        run: |
+          if [ -s unresolved.txt ]; then
+            tr '\n' '\0' < unresolved.txt | xargs -0 git diff --cc -- > cc.diff 2>/dev/null || echo "(无)" > cc.diff
+          else
+            echo "(无)" > cc.diff
+          fi
+          wc -c cc.diff
+
+      - name: 若已清零则提交
+        run: |
+          N=$(git diff --name-only --diff-filter=U | wc -l)
+          echo "剩余冲突: $N"
+          echo "N=$N" >> $GITHUB_ENV
+          if [ "$N" -eq 0 ]; then
+            git commit -q -m "merge: Linux 5.10.272 into vendor snapshot (conflicts resolved)" || true
+            git branch -f lts-272 HEAD
+            git push -f origin lts-272
+            echo "已推送分支 lts-272"
+          fi
+
+      - name: 发布
+        if: always()
+        run: |
+          mkdir -p /tmp/res
+          for f in unresolved.txt cc.diff merge.log left.txt still.txt t1.txt t2.txt; do
+            [ -f "$f" ] && cp "$f" /tmp/res/ || true
+          done
+          cd /tmp/res && git init -q . && git config user.email ci@local && git config user.name ci
+          git add -A && git commit -q -m "resolve pass2: $(date -u +%FT%TZ)" || true
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-resolve2
