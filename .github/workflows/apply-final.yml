@@ -78,12 +78,17 @@ jobs:
 
       - name: commit if zero
         run: |
+          exec > >(tee commit.log) 2>&1
+          set -x
           N=$(git ls-files -u | cut -f2 | sort -u | wc -l)
           echo "remaining=$N"
           if [ "$N" -eq 0 ]; then
             git add -A
-            git commit -q -m "merge: Linux 5.10.272 into OPPO mt6983 vendor tree (base 236, 78 block decisions)"
+            echo "--- staged ---"
+            git status --short | head -20
+            git -c user.email=ci@local -c user.name=ci commit -m "merge: Linux 5.10.272 into OPPO mt6983 vendor tree (base 236, 96 block decisions)"
             git branch -f lts-272 HEAD
+            echo "--- pushing ---"
             git push -f origin lts-272
             echo "PUSHED lts-272"
             git log -1 --format="%H %s"
@@ -96,7 +101,7 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/res
-          for f in unresolved.txt decisions.tsv merge.log blk.log; do [ -f "$f" ] && cp "$f" /tmp/res/; done
+          for f in unresolved.txt decisions.tsv merge.log blk.log commit.log; do [ -f "$f" ] && cp "$f" /tmp/res/; done
           cd /tmp/res && git init -q . && git config user.email ci@local && git config user.name ci
           git add -A && git commit -q -m "apply final $(date -u +%FT%TZ)" || true
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-final
