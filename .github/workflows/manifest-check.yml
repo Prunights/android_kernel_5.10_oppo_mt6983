@@ -1,0 +1,44 @@
+name: Manifest Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      FILE_CHECK:
+        default: 'oppo_find_n2_flip_b'
+      OWNER_CHECK:
+        default: 'Prunights'
+
+jobs:
+  chk:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: run
+        run: |
+          set +e
+          FILE="${{ inputs.FILE_CHECK }}"
+          DYNAMIC_REPO_INPUT="${{ inputs.OWNER_CHECK }}"
+          {
+            echo "FILE=$FILE DYNAMIC=$DYNAMIC_REPO_INPUT"
+            echo "--- bash version"; bash --version | head -1
+            for ENTRY in "OnePlusOSS|kernel_manifest" "${DYNAMIC_REPO_INPUT}|kernel_manifest" "Numbersf|Kernel_Manifest_Appendix"; do
+              OWNER=${ENTRY%%|*}; REPO_NAME=${ENTRY##*|}
+              echo "=== try ${OWNER}/${REPO_NAME}"
+              BRANCHES=$(git ls-remote --heads "https://github.com/${OWNER}/${REPO_NAME}.git" 2>&1 | sed 's|.*refs/heads/||')
+              rc=$?
+              echo "ls-remote rc=$rc branch_count=$(echo "$BRANCHES" | grep -c . )"
+              echo "$BRANCHES" | head -3
+              for BRANCH in $BRANCHES; do
+                URL="https://raw.githubusercontent.com/${OWNER}/${REPO_NAME}/${BRANCH}/${FILE}.xml"
+                code=$(curl -s -o /dev/null -w '%{http_code}' --head --max-time 10 "$URL")
+                if [ "$code" = "200" ]; then echo "FOUND $URL"; break; fi
+                [ "$BRANCH" = "$(echo "$BRANCHES" | head -3 | tail -1)" ] && echo "head3 checked, last code=$code"
+              done
+            done
+          } > out.log 2>&1
+          cat out.log
+          mkdir -p /tmp/r && cp out.log /tmp/r/ && cd /tmp/r
+          git init -q . && git config user.email ci@local && git config user.name ci
+          git add -A && git commit -q -m "manifest check"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-manifest-check
