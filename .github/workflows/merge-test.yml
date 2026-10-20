@@ -16,6 +16,8 @@ jobs:
   merge:
     runs-on: ubuntu-22.04
     timeout-minutes: 350
+    permissions:
+      contents: write
     steps:
       - name: 全量检出目标分支
         uses: actions/checkout@v4
@@ -77,6 +79,21 @@ jobs:
             conflicts.txt
             merge.log
           retention-days: 7
+
+      - name: 发布结果到 ci-results 分支
+        if: always()
+        run: |
+          mkdir -p /tmp/res
+          cp conflicts.txt /tmp/res/ 2>/dev/null || echo "(无 conflicts.txt)" > /tmp/res/conflicts.txt
+          cp merge.log /tmp/res/ 2>/dev/null || echo "(无 merge.log)" > /tmp/res/merge.log
+          cd /tmp/res
+          git init -q .
+          git config user.email ci@local
+          git config user.name ci
+          git add -A
+          git commit -q -m "merge test: $(date -u +%FT%TZ)" || true
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-results
+          echo "已推送到 ci-results"
 
       - name: 磁盘收尾
         if: always()
