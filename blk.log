@@ -1,0 +1,166 @@
+resolved: arch/arm64/kernel/cpufeature.c blocks: 2
+resolved: arch/arm64/kernel/proton-pack.c blocks: 6
+resolved: block/blk-settings.c blocks: 1
+resolved: drivers/base/platform.c blocks: 1
+resolved: drivers/base/power/domain_governor.c blocks: 1
+resolved: drivers/base/property.c blocks: 1
+resolved: drivers/base/regmap/regmap.c blocks: 1
+resolved: drivers/cpufreq/scmi-cpufreq.c blocks: 2
+resolved: drivers/firmware/efi/mokvar-table.c blocks: 1
+resolved: drivers/hwmon/max16065.c blocks: 2
+resolved: drivers/i2c/busses/i2c-mt65xx.c blocks: 1
+resolved: drivers/mmc/host/sdhci.c blocks: 1
+resolved: drivers/remoteproc/remoteproc_core.c blocks: 4
+resolved: drivers/scsi/scsi_error.c blocks: 2
+resolved: drivers/scsi/scsi_lib.c blocks: 1
+PENDING: drivers/scsi/ufs/ufshcd.c blocks: 3
+resolved: drivers/tty/serial/max310x.c blocks: 1
+resolved: drivers/usb/gadget/function/u_audio.c blocks: 2
+resolved: drivers/usb/host/xhci-hub.c blocks: 1
+resolved: drivers/usb/host/xhci-ring.c blocks: 1
+resolved: drivers/usb/typec/tcpm/tcpci_maxim.c blocks: 1
+resolved: drivers/usb/typec/ucsi/ucsi.c blocks: 1
+resolved: fs/coredump.c blocks: 1
+resolved: fs/f2fs/data.c blocks: 1
+resolved: fs/f2fs/f2fs.h blocks: 1
+resolved: fs/f2fs/file.c blocks: 1
+resolved: fs/f2fs/segment.c blocks: 1
+resolved: fs/f2fs/super.c blocks: 4
+resolved: fs/f2fs/sysfs.c blocks: 4
+resolved: fs/fs-writeback.c blocks: 1
+resolved: fs/proc/fd.c blocks: 2
+resolved: include/linux/binfmts.h blocks: 1
+resolved: include/linux/blk_types.h blocks: 1
+resolved: include/linux/device.h blocks: 2
+resolved: include/linux/font.h blocks: 1
+resolved: include/linux/hugetlb.h blocks: 2
+resolved: include/linux/irqdomain.h blocks: 1
+resolved: include/linux/mmc/host.h blocks: 1
+resolved: include/linux/mutex.h blocks: 1
+resolved: include/linux/pid.h blocks: 1
+resolved: include/linux/regulator/driver.h blocks: 1
+resolved: include/linux/remoteproc.h blocks: 1
+resolved: include/linux/usb/usbnet.h blocks: 1
+resolved: include/net/bluetooth/hci_core.h blocks: 1
+resolved: include/net/inet_connection_sock.h blocks: 1
+resolved: include/net/sock.h blocks: 1
+resolved: kernel/audit_fsnotify.c blocks: 1
+resolved: kernel/bpf/cgroup.c blocks: 1
+resolved: kernel/cgroup/cgroup.c blocks: 1
+resolved: kernel/time/posix-timers.c blocks: 1
+resolved: mm/Kconfig blocks: 1
+resolved: mm/hugetlb.c blocks: 2
+resolved: mm/khugepaged.c blocks: 1
+resolved: mm/ksm.c blocks: 2
+resolved: mm/mmap.c blocks: 2
+resolved: mm/slub.c blocks: 1
+resolved: mm/zsmalloc.c blocks: 1
+resolved: net/ipv4/ah4.c blocks: 1
+resolved: net/ipv4/esp4.c blocks: 1
+resolved: net/ipv4/sysctl_net_ipv4.c blocks: 1
+resolved: net/ipv6/ah6.c blocks: 1
+resolved: net/ipv6/esp6.c blocks: 1
+resolved: net/ipv6/ip6_tunnel.c blocks: 1
+resolved: net/ipv6/xfrm6_policy.c blocks: 1
+resolved: security/security.c blocks: 1
+== summary ==
+resolved files: 64, pending files: 1
+  pending: drivers/scsi/ufs/ufshcd.c
+WHOLE-THEIRS: Documentation/arm64/silicon-errata.rst
+UNHANDLED: arch/arm64/kernel/cpufeature.c
+UNHANDLED: arch/arm64/kernel/proton-pack.c
+WHOLE-THEIRS: arch/x86/mm/fault.c
+UNHANDLED: block/blk-settings.c
+UNHANDLED: drivers/base/platform.c
+UNHANDLED: drivers/base/power/domain_governor.c
+UNHANDLED: drivers/base/property.c
+UNHANDLED: drivers/base/regmap/regmap.c
+UNHANDLED: drivers/cpufreq/scmi-cpufreq.c
+WHOLE-OURS: drivers/dma/mediatek/mtk-uart-apdma.c
+UNHANDLED: drivers/firmware/efi/mokvar-table.c
+UNHANDLED: drivers/hwmon/max16065.c
+UNHANDLED: drivers/i2c/busses/i2c-mt65xx.c
+UNHANDLED: drivers/media/platform/mtk-vcodec/mtk_vcodec_fw_scp.c
+UNHANDLED: drivers/media/platform/mtk-vcodec/venc/venc_h264_if.c
+UNHANDLED: drivers/mmc/host/sdhci.c
+UNHANDLED: drivers/remoteproc/remoteproc_core.c
+UNHANDLED: drivers/scsi/scsi_error.c
+UNHANDLED: drivers/scsi/scsi_lib.c
+WHOLE-OURS: drivers/scsi/ufs/ufshcd.c
+UNHANDLED: drivers/tty/serial/max310x.c
+UNHANDLED: drivers/usb/gadget/function/u_audio.c
+UNHANDLED: drivers/usb/host/xhci-hub.c
+UNHANDLED: drivers/usb/host/xhci-ring.c
+UNHANDLED: drivers/usb/typec/tcpm/tcpci_maxim.c
+WHOLE-OURS: drivers/usb/typec/tcpm/tcpm.c
+UNHANDLED: drivers/usb/typec/ucsi/ucsi.c
+UNHANDLED: fs/coredump.c
+UNHANDLED: fs/f2fs/data.c
+UNHANDLED: fs/f2fs/f2fs.h
+UNHANDLED: fs/f2fs/file.c
+UNHANDLED: fs/f2fs/segment.c
+UNHANDLED: fs/f2fs/super.c
+UNHANDLED: fs/f2fs/sysfs.c
+UNHANDLED: fs/fs-writeback.c
+WHOLE-THEIRS: fs/lockd/svclock.c
+WHOLE-THEIRS: fs/lockd/svcsubs.c
+WHOLE-THEIRS: fs/nfsd/nfs2acl.c
+WHOLE-THEIRS: fs/nfsd/nfs4proc.c
+WHOLE-THEIRS: fs/nfsd/nfs4recover.c
+WHOLE-THEIRS: fs/nfsd/nfs4state.c
+WHOLE-THEIRS: fs/nfsd/nfs4xdr.c
+WHOLE-THEIRS: fs/nfsd/nfscache.c
+WHOLE-THEIRS: fs/nfsd/nfsctl.c
+WHOLE-THEIRS: fs/nfsd/nfsfh.h
+WHOLE-THEIRS: fs/nfsd/nfssvc.c
+WHOLE-THEIRS: fs/nfsd/nfsxdr.c
+WHOLE-THEIRS: fs/nfsd/stats.c
+WHOLE-THEIRS: fs/nfsd/stats.h
+WHOLE-THEIRS: fs/nfsd/vfs.c
+WHOLE-THEIRS: fs/notify/fanotify/fanotify_user.c
+WHOLE-THEIRS: fs/notify/inotify/inotify_user.c
+WHOLE-THEIRS: fs/notify/mark.c
+UNHANDLED: fs/proc/fd.c
+UNHANDLED: include/linux/binfmts.h
+UNHANDLED: include/linux/blk_types.h
+WHOLE-THEIRS: include/linux/compiler-clang.h
+UNHANDLED: include/linux/device.h
+UNHANDLED: include/linux/font.h
+UNHANDLED: include/linux/hugetlb.h
+UNHANDLED: include/linux/irqdomain.h
+UNHANDLED: include/linux/mmc/host.h
+UNHANDLED: include/linux/mutex.h
+UNHANDLED: include/linux/pid.h
+UNHANDLED: include/linux/regulator/driver.h
+UNHANDLED: include/linux/remoteproc.h
+UNHANDLED: include/linux/usb/usbnet.h
+UNHANDLED: include/net/bluetooth/hci_core.h
+UNHANDLED: include/net/inet_connection_sock.h
+UNHANDLED: include/net/sock.h
+UNHANDLED: kernel/audit_fsnotify.c
+UNHANDLED: kernel/bpf/cgroup.c
+UNHANDLED: kernel/cgroup/cgroup.c
+UNHANDLED: kernel/time/posix-timers.c
+UNHANDLED: mm/Kconfig
+UNHANDLED: mm/hugetlb.c
+UNHANDLED: mm/khugepaged.c
+UNHANDLED: mm/ksm.c
+UNHANDLED: mm/mmap.c
+UNHANDLED: mm/slub.c
+UNHANDLED: mm/zsmalloc.c
+WHOLE-THEIRS: net/bluetooth/hci_event.c
+WHOLE-THEIRS: net/core/net_namespace.c
+UNHANDLED: net/ipv4/ah4.c
+UNHANDLED: net/ipv4/esp4.c
+UNHANDLED: net/ipv4/sysctl_net_ipv4.c
+UNHANDLED: net/ipv6/ah6.c
+UNHANDLED: net/ipv6/esp6.c
+UNHANDLED: net/ipv6/ip6_tunnel.c
+UNHANDLED: net/ipv6/xfrm6_policy.c
+WHOLE-THEIRS: net/netfilter/nf_conntrack_proto_sctp.c
+WHOLE-THEIRS: net/sunrpc/svc.c
+WHOLE-THEIRS: net/xfrm/xfrm_state.c
+WHOLE-THEIRS: net/xfrm/xfrm_user.c
+UNHANDLED: security/security.c
+whole-file resolved: 30
+final unmerged: 66

@@ -1,0 +1,97 @@
+path	idx	decision	reason
+arch/arm64/kernel/cpufeature.c	0	OT	我方 MTE 初始化与上游 zero-page 修复并存
+arch/arm64/kernel/cpufeature.c	1	OT	同上
+arch/arm64/kernel/proton-pack.c	0	O	保厂商已验证的 BHB 缓解逻辑
+arch/arm64/kernel/proton-pack.c	1	O	同上
+arch/arm64/kernel/proton-pack.c	2	O	同上
+arch/arm64/kernel/proton-pack.c	3	O	同上
+arch/arm64/kernel/proton-pack.c	4	O	同上
+arch/arm64/kernel/proton-pack.c	5	O	同上
+block/blk-settings.c	0	O	保 DEVICE_XCOPY 的 kabi_res 用法
+drivers/base/platform.c	0	O	整文件策略: 保厂商实现
+drivers/base/power/domain_governor.c	0	T	上游重写 CPU constraint 逻辑，我方是旧版
+drivers/base/property.c	0	T	两边几乎一致，取上游新版
+drivers/base/regmap/regmap.c	0	T	上游 bulk read/write 初始化修复，我方是旧代码
+drivers/cpufreq/scmi-cpufreq.c	0	T	上游加 policy NULL 保护
+drivers/cpufreq/scmi-cpufreq.c	1	T	同上，配套改动
+drivers/firmware/efi/mokvar-table.c	0	O	整文件策略: 保厂商实现
+drivers/hwmon/max16065.c	0	T	上游加 READ_ONCE，纯 bugfix
+drivers/hwmon/max16065.c	1	T	上游合并 UV/OV alarm，纯 bugfix
+drivers/i2c/busses/i2c-mt65xx.c	0	OT	我方加 MTK 变量 + 上游加 write_then_read，并集
+drivers/mmc/host/sdhci.c	0	T	整文件策略: 我方无实质改动
+drivers/remoteproc/remoteproc_core.c	0	O	我方新增 rproc_set_firmware 文档注释
+drivers/remoteproc/remoteproc_core.c	1	O	我方加 rproc_recovery_wq 判空，比上游健壮
+drivers/remoteproc/remoteproc_core.c	2	T	上游补 alloc 失败 return -ENOMEM
+drivers/remoteproc/remoteproc_core.c	3	O	我方 destroy 前判空
+drivers/scsi/scsi_error.c	0	T	上游新增 busy 计数变量
+drivers/scsi/scsi_error.c	1	T	上游修 eh wakeup 竞态
+drivers/scsi/scsi_lib.c	0	T	整文件策略: 我方无实质改动
+drivers/scsi/ufs/ufshcd.c	0	T	上游加 pm_op_in_progress 保护
+drivers/scsi/ufs/ufshcd.c	1	O	保厂商 UFS reset 状态机，记录丢弃上游 block_requests
+drivers/tty/serial/max310x.c	0	T	整文件策略: 我方无实质改动
+drivers/usb/gadget/function/u_audio.c	0	O	我方 395 行厂商大改，不能覆盖
+drivers/usb/gadget/function/u_audio.c	1	O	同上，配套 free 流程
+drivers/usb/host/xhci-hub.c	0	T	整文件策略: 我方无实质改动
+drivers/usb/host/xhci-ring.c	0	O	整文件策略: 保厂商实现
+drivers/usb/typec/tcpm/tcpci_maxim.c	0	T	上游补日志换行
+drivers/usb/typec/ucsi/ucsi.c	0	T	上游加 prev_role 跟踪
+fs/coredump.c	0	T	整文件策略: 我方无实质改动
+fs/f2fs/data.c	0	O	f2fs 整体保厂商
+fs/f2fs/f2fs.h	0	O	整文件策略: 保厂商实现
+fs/f2fs/file.c	0	O	f2fs 整体保厂商
+fs/f2fs/file.c	1	O	f2fs 整体保厂商
+fs/f2fs/file.c	2	O	f2fs 整体保厂商
+fs/f2fs/file.c	3	O	f2fs 整体保厂商
+fs/f2fs/file.c	4	O	f2fs 整体保厂商
+fs/f2fs/file.c	5	O	f2fs 整体保厂商
+fs/f2fs/segment.c	0	O	f2fs 整体保厂商
+fs/f2fs/super.c	0	O	f2fs 整体保厂商
+fs/f2fs/super.c	1	O	f2fs 整体保厂商
+fs/f2fs/super.c	2	O	f2fs 整体保厂商，丢上游 xattr cache
+fs/f2fs/super.c	3	O	f2fs 整体保厂商，丢上游 xattr cache
+fs/f2fs/sysfs.c	0	O	f2fs 整体保厂商
+fs/f2fs/sysfs.c	1	O	f2fs 整体保厂商
+fs/f2fs/sysfs.c	2	O	f2fs 整体保厂商
+fs/f2fs/sysfs.c	3	O	f2fs 整体保厂商
+fs/fs-writeback.c	0	O	整文件策略: 保厂商实现
+fs/proc/fd.c	0	T	上游改用 fget_task 遍历
+fs/proc/fd.c	1	T	同上，修 fd 信息泄露
+include/linux/binfmts.h	0	T	整文件策略: 我方无实质改动
+include/linux/blk_types.h	0	O	REQ_OP 枚举值必须整体对齐，保厂商 DEVICE_COPY=18
+include/linux/device.h	0	OT	android_kabi.h 与 cleanup.h 都要
+include/linux/device.h	1	O	ANDROID_KABI_RESERVE 不能换成上游新字段，否则破 GKI ABI
+include/linux/font.h	0	T	上游同时改类型并加 charcount，取上游即包含我方改动
+include/linux/hugetlb.h	0	T	上游声明含我方那条
+include/linux/hugetlb.h	1	T	同上
+include/linux/irqdomain.h	0	O	保 GENKSYMS hack，丢上游 struct irq_domain_info
+include/linux/mmc/host.h	0	O	KABI reserve 优先，MTK 不用 SD Express
+include/linux/mutex.h	0	OT	android_vendor.h 与 cleanup.h 都要
+include/linux/pid.h	0	T	整文件策略: 我方无实质改动
+include/linux/regulator/driver.h	0	O	KABI reserve 优先，丢上游 last_off 类型调整
+include/linux/remoteproc.h	0	T	整文件策略: 我方无实质改动
+include/linux/usb/usbnet.h	0	O	KABI reserve 优先
+include/net/bluetooth/hci_core.h	0	OT	android_kabi.h 与 srcu.h 都要
+include/net/inet_connection_sock.h	0	O	整文件策略: 保厂商实现
+include/net/sock.h	0	O	KABI reserve 优先，保 sk_peer_lock
+kernel/audit_fsnotify.c	0	T	上游修 inode→dir 传参
+kernel/bpf/cgroup.c	0	T	整文件策略: 我方无实质改动
+kernel/cgroup/cgroup.c	0	T	上游用 INIT_WORK 替换手写 pending bit
+kernel/time/posix-timers.c	0	T	上游加 cond_resched 与 -EAGAIN 返回
+mm/Kconfig	0	OT	我方 OPLUS_FEATURE_PERFORMANCE_MM 与上游 KMAP_LOCAL 并存
+mm/hugetlb.c	0	T	我方为空，上游新增 huge_pmd_unshare_flush
+mm/hugetlb.c	1	T	上游 hugetlb_unshare_pmds 带 take_locks，更完整
+mm/khugepaged.c	0	OT	我方 vm_write_begin 与上游 anon_vma 复查并存
+mm/ksm.c	0	T	上游改 put_page，修引用计数
+mm/ksm.c	1	T	同上配套
+mm/mmap.c	0	OT	我方 CONT_PTE_HUGEPAGE 与上游 split 注释并存
+mm/mmap.c	1	OT	我方 #endif 与上游 hugetlb_split 并存
+mm/slub.c	0	T	上游加 check_valid_pointer 校验
+mm/zsmalloc.c	0	O	保 MTK 的 __GFP_CMA 标志，丢上游 zalloc
+net/ipv4/ah4.c	0	T	上游 xfrm_output_resume 加 skb_to_full_sk
+net/ipv4/esp4.c	0	T	上游 ESP-in-TCP 错误处理修复
+net/ipv4/sysctl_net_ipv4.c	0	O	整文件策略: 保厂商实现
+net/ipv6/ah6.c	0	T	同 ah4
+net/ipv6/esp6.c	0	T	同 esp4
+net/ipv6/ip6_tunnel.c	0	T	整文件策略: 我方无实质改动
+net/ipv6/xfrm6_policy.c	0	T	上游修 saddr 取值
+security/security.c	0	T	整文件策略: 我方无实质改动

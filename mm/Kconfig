@@ -941,4 +941,7 @@ config CONT_PTE_HUGEPAGE_64K_ZRAM
 	help
 	  Cont Pte Hugepage support 64K ZRAM
 
+config KMAP_LOCAL
+	bool
+
 endmenu
