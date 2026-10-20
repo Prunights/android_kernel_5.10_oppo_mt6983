@@ -477,6 +477,19 @@ struct address_space {
 	spinlock_t		private_lock;
 	struct list_head	private_list;
 	void			*private_data;
+
+	/*
+	 * OPPO/MTK CONT_PTE_HUGEPAGE: ACK 关掉了 READ_ONLY_THP_FOR_FS，
+	 * 这里复用 KABI 保留位放 nr_thps；reserved2 被当作 endio_spinlock 使用。
+	 */
+#if !defined(CONFIG_READ_ONLY_THP_FOR_FS) && defined(CONFIG_CONT_PTE_HUGEPAGE)
+	ANDROID_KABI_USE(1, atomic_t nr_thps);
+#else
+	ANDROID_KABI_RESERVE(1);
+#endif
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } __attribute__((aligned(sizeof(long)))) __randomize_layout;
 	/*
 	 * On most architectures that alignment is already the case; but
