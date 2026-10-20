@@ -1,0 +1,106 @@
+name: Resolve Pass 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'vendor branch'
+        required: true
+        default: 'n2f-272'
+      base_tag:
+        default: 'v5.10.236'
+      upstream_tag:
+        default: 'v5.10.272'
+
+jobs:
+  resolve:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target }}
+
+      - name: 记录 vendor 树
+        id: v
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> $GITHUB_OUTPUT
+
+      - name: 拉上游
+        run: |
+          git remote add upstream https://github.com/gregkh/linux.git || true
+          git fetch --no-tags upstream "refs/tags/${{ inputs.base_tag }}:refs/tags/${{ inputs.base_tag }}" "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+
+      - name: 造快照并合并
+        run: |
+          git config user.email ci@local
+          git config user.name ci
+          git checkout -B lts-test "${{ inputs.base_tag }}"
+          git read-tree "${{ steps.v.outputs.tree }}"
+          git commit -q -m "vendor snapshot on ${{ inputs.base_tag }}"
+          git reset --hard HEAD && git clean -fdq
+          set +e
+          git merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
+          set -e
+          git diff --name-only --diff-filter=U | sort > all_conflicts.txt
+          echo "初始冲突: $(wc -l < all_conflicts.txt)"
+
+      - name: 统计每个文件的冲突段
+        run: |
+          printf "hunks\tours_lines\ttheirs_lines\tpath\n" > hunks.tsv
+          while IFS= read -r f; do
+            [ -f "$f" ] || { printf "0\t0\t0\t%s\n" "$f" >> hunks.tsv; continue; }
+            n=$(grep -c '^<<<<<<<' "$f" 2>/dev/null || echo 0)
+            o=$(awk '/^<<<<<<</{a=1;next}/^=======/{a=0;c=1;next}/^>>>>>>>/{c=0;next}a||c' "$f" 2>/dev/null | wc -l)
+            printf "%s\t%s\t%s\t%s\n" "$n" "0" "$o" "$f" >> hunks.tsv
+          done < all_conflicts.txt
+          echo "=== 冲突段数分布 ==="
+          awk -F'\t' 'NR>1{print $1}' hunks.tsv | sort -n | uniq -c
+          echo "=== 段数最多的 20 个 ==="
+          sort -t$'\t' -k1,1nr hunks.tsv | head -21
+
+      - name: 机械处理第一批（无关子系统取上游 / MTK 驱动取本地）
+        run: |
+          # 手机内核根本用不到、且上游纯修复的：直接取上游
+          THEIRS="fs/nfsd fs/lockd fs/notify net/sunrpc net/bluetooth net/core net/xfrm net/netfilter arch/x86 Documentation"
+          git diff --name-only --diff-filter=U -- $THEIRS > take_theirs.txt 2>/dev/null || true
+          if [ -s take_theirs.txt ]; then
+            xargs -a take_theirs.txt git checkout --theirs --
+            xargs -a take_theirs.txt git add --
+          fi
+          echo "取上游: $(wc -l < take_theirs.txt 2>/dev/null || echo 0)"
+
+          # MTK 私有驱动 / 厂商改过的平台代码：保留本地，避免上游通用改动破坏厂商行为
+          OURS="drivers/dma/mediatek drivers/i2c/busses/i2c-mt65xx.c drivers/media/platform/mtk-vcodec drivers/usb/typec/tcpm/tcpm.c"
+          git diff --name-only --diff-filter=U -- $OURS > take_ours.txt 2>/dev/null || true
+          if [ -s take_ours.txt ]; then
+            xargs -a take_ours.txt git checkout --ours --
+            xargs -a take_ours.txt git add --
+          fi
+          echo "取本地: $(wc -l < take_ours.txt 2>/dev/null || echo 0)"
+
+          git diff --name-only --diff-filter=U | sort > remaining.txt
+          echo "剩余需人工: $(wc -l < remaining.txt)"
+          cat remaining.txt
+
+      - name: 导出剩余冲突的合并 diff
+        run: |
+          if [ -s remaining.txt ]; then
+            git diff --cc -- $(cat remaining.txt) > cc.diff 2>/dev/null || true
+          else
+            echo "(无)" > cc.diff
+          fi
+          wc -c cc.diff
+          sed -n '1,60p' cc.diff
+
+      - name: 发布
+        if: always()
+        run: |
+          mkdir -p /tmp/res
+          cp all_conflicts.txt hunks.tsv remaining.txt cc.diff merge.log /tmp/res/ 2>/dev/null || true
+          cp take_theirs.txt take_ours.txt /tmp/res/ 2>/dev/null || true
+          cd /tmp/res && git init -q . && git config user.email ci@local && git config user.name ci
+          git add -A && git commit -q -m "resolve pass 1: $(date -u +%FT%TZ)" || true
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-resolve
