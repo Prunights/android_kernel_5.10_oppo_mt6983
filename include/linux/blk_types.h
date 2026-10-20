@@ -385,9 +385,11 @@ enum req_opf {
 	/* reset a zone write pointer */
 	REQ_OP_ZONE_RESET	= 17,
 	/* reset all the zone present on the device */
-	REQ_OP_ZONE_RESET_ALL	= 17,
+	REQ_OP_ZONE_RESET_ALL	= 19,
+	/* Append to a zone */
+	REQ_OP_ZONE_APPEND	= 21,
 #ifdef CONFIG_DEVICE_XCOPY
-	/* device copy */
+	/* device copy (OPPO/MTK vendor op, kept on the free slot 18) */
 	REQ_OP_DEVICE_COPY	= 18,
 #endif
 	/* SCSI passthrough using struct scsi_request */
