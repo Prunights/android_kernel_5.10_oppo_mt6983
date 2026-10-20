@@ -579,7 +579,8 @@ struct device {
 	ANDROID_KABI_RESERVE(5);
 	ANDROID_KABI_RESERVE(6);
 	ANDROID_KABI_RESERVE(7);
-	ANDROID_KABI_RESERVE(8);
+	/* LTS 5.10.2xx: device flags. 占用 reserved8 的 8 字节，结构体大小与偏移不变 */
+	DECLARE_BITMAP(flags, DEV_FLAG_COUNT);
 };
 
 #define __create_dev_flag_accessors(accessor_name, flag_name) \
