@@ -67,8 +67,8 @@ jobs:
           THEIRS="fs/nfsd fs/lockd fs/notify net/sunrpc net/bluetooth net/core net/xfrm net/netfilter arch/x86 Documentation"
           git diff --name-only --diff-filter=U -- $THEIRS > take_theirs.txt 2>/dev/null || true
           if [ -s take_theirs.txt ]; then
-            xargs -a take_theirs.txt git checkout --theirs --
-            xargs -a take_theirs.txt git add --
+            xargs -a take_theirs.txt git checkout --theirs -- 2>/dev/null || true
+            xargs -a take_theirs.txt git add -- 2>/dev/null || true
           fi
           echo "取上游: $(wc -l < take_theirs.txt 2>/dev/null || echo 0)"
 
@@ -76,19 +76,19 @@ jobs:
           OURS="drivers/dma/mediatek drivers/i2c/busses/i2c-mt65xx.c drivers/media/platform/mtk-vcodec drivers/usb/typec/tcpm/tcpm.c"
           git diff --name-only --diff-filter=U -- $OURS > take_ours.txt 2>/dev/null || true
           if [ -s take_ours.txt ]; then
-            xargs -a take_ours.txt git checkout --ours --
-            xargs -a take_ours.txt git add --
+            xargs -a take_ours.txt git checkout --ours -- 2>/dev/null || true
+            xargs -a take_ours.txt git add -- 2>/dev/null || true
           fi
           echo "取本地: $(wc -l < take_ours.txt 2>/dev/null || echo 0)"
 
-          git diff --name-only --diff-filter=U | sort > remaining.txt
-          echo "剩余需人工: $(wc -l < remaining.txt)"
-          cat remaining.txt
+          git diff --name-only --diff-filter=U | sort > remaining.txt || true
+          echo "剩余需人工: $(wc -l < remaining.txt 2>/dev/null || echo 0)"
+          cat remaining.txt 2>/dev/null || true
 
       - name: 导出剩余冲突的合并 diff
         run: |
           if [ -s remaining.txt ]; then
-            git diff --cc -- $(cat remaining.txt) > cc.diff 2>/dev/null || true
+            tr '\n' '\0' < remaining.txt | xargs -0 git diff --cc -- > cc.diff 2>/dev/null || echo "(无)" > cc.diff
           else
             echo "(无)" > cc.diff
           fi
