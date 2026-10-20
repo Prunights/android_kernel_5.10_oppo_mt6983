@@ -60,6 +60,13 @@ jobs:
       - name: 第二层 逐段自动判定(我方未改的段取上游)
         run: |
           git diff --name-only --diff-filter=U | sort > left.txt
+          echo "待自动判定: $(wc -l < left.txt)"
+          # 强制用 diff3 风格重写冲突标记，保证有 base 段可比较
+          tr '\n' '\0' < left.txt | xargs -0 git checkout --conflict=diff3 -- 2>/dev/null || true
+          echo "抽样检查 diff3 标记:"
+          head -3 left.txt | while IFS= read -r f; do
+            printf '  %s -> base段%d 段\n' "$f" "$(grep -c '^||||||| ' "$f" 2>/dev/null || echo 0)"
+          done
           python3 - <<'PY'
           import os
           files=[l.strip() for l in open('left.txt') if l.strip()]
