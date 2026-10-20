@@ -64,23 +64,40 @@ jobs:
 
       - name: apply whole-file policy
         run: |
-          xargs -a theirs.txt git checkout --theirs -- 2>/dev/null || true
-          xargs -a theirs.txt git add -- 2>/dev/null || true
-          xargs -a ours.txt git checkout --ours -- 2>/dev/null || true
-          xargs -a ours.txt git add -- 2>/dev/null || true
-          echo "after whole-file: $(git diff --name-only --diff-filter=U | wc -l)"
+          set -x
+          ok=0; bad=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if git checkout --theirs -- "$f" 2>/dev/null; then git add -- "$f" 2>/dev/null; ok=$((ok+1)); else bad=$((bad+1)); echo "THEIRS-FAIL $f"; fi
+          done < theirs.txt
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if git checkout --ours -- "$f" 2>/dev/null; then git add -- "$f" 2>/dev/null; ok=$((ok+1)); else bad=$((bad+1)); echo "OURS-FAIL $f"; fi
+          done < ours.txt
+          echo "whole-file ok=$ok fail=$bad"
+          git ls-files -u | cut -f2 | sort -u > u1.txt || true
+          echo "unmerged now: $(wc -l < u1.txt)"
+          cat u1.txt
 
       - name: apply block decisions
         run: |
-          python3 apply_block.py
-          git diff --name-only --diff-filter=U | sort > unresolved.txt || true
-          echo "=== remaining ==="
+          set -x
+          python3 apply_block.py 2>&1 | tee blk.log
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            [ -f "$f" ] || continue
+            if ! grep -qE '^(<<<<<<< |>>>>>>> )' "$f" 2>/dev/null; then
+              git add -- "$f" 2>/dev/null && echo "ADDED $f"
+            fi
+          done < u1.txt
+          git ls-files -u | cut -f2 | sort -u > unresolved.txt || true
+          echo "=== remaining unmerged ==="
           wc -l < unresolved.txt
           cat unresolved.txt
 
       - name: commit if zero
         run: |
-          N=$(git diff --name-only --diff-filter=U | wc -l)
+          N=$(git ls-files -u | cut -f2 | sort -u | wc -l)
           echo "remaining=$N"
           if [ "$N" -eq 0 ]; then
             git add -A
@@ -98,7 +115,7 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/res
-          for f in unresolved.txt decisions.tsv merge.log; do [ -f "$f" ] && cp "$f" /tmp/res/; done
+          for f in unresolved.txt decisions.tsv merge.log blk.log u1.txt; do [ -f "$f" ] && cp "$f" /tmp/res/; done
           cd /tmp/res && git init -q . && git config user.email ci@local && git config user.name ci
           git add -A && git commit -q -m "apply final $(date -u +%FT%TZ)" || true
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-final
