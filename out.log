@@ -1,0 +1,20 @@
+FILE=oppo_find_n2_flip_b DYNAMIC=Prunights
+--- bash version
+GNU bash, version 5.1.16(1)-release (x86_64-pc-linux-gnu)
+=== try OnePlusOSS/kernel_manifest
+ls-remote rc=0 branch_count=13
+oneplus/sm6375
+oneplus/sm7550
+oneplus/sm7635
+head3 checked, last code=404
+=== try Prunights/kernel_manifest
+ls-remote rc=0 branch_count=1
+main
+FOUND https://raw.githubusercontent.com/Prunights/kernel_manifest/main/oppo_find_n2_flip_b.xml
+=== try Numbersf/Kernel_Manifest_Appendix
+ls-remote rc=0 branch_count=40
+master
+oneplus/mt6789
+oneplus/mt6833
+head3 checked, last code=404
+FOUND https://raw.githubusercontent.com/Numbersf/Kernel_Manifest_Appendix/oppo/mt6983/oppo_find_n2_flip_b.xml
