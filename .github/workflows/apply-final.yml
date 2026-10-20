@@ -10,6 +10,12 @@ on:
       upstream_tag:
         default: 'v5.10.272'
 
+env:
+  DEC_B64: "cGF0aAlpZHgJZGVjaXNpb24JcmVhc29uCmRyaXZlcnMvYmFzZS9wb3dlci9kb21haW5fZ292ZXJub3IuYwkwCVQJ5LiK5ri46YeN5YaZIENQVSBjb25zdHJhaW50IOmAu+i+ke+8jOaIkeaWueaYr+aXp+eJiApkcml2ZXJzL2Jhc2UvcHJvcGVydHkuYwkwCVQJ5Lik6L655Yeg5LmO5LiA6Ie077yM5Y+W5LiK5ri45paw54mICmRyaXZlcnMvYmFzZS9yZWdtYXAvcmVnbWFwLmMJMAlUCeS4iua4uCBidWxrIHJlYWQvd3JpdGUg5Yid5aeL5YyW5L+u5aSN77yM5oiR5pa55piv5pen5Luj56CBCmRyaXZlcnMvY3B1ZnJlcS9zY21pLWNwdWZyZXEuYwkwCVQJ5LiK5ri45YqgIHBvbGljeSBOVUxMIOS/neaKpApkcml2ZXJzL2NwdWZyZXEvc2NtaS1jcHVmcmVxLmMJMQlUCeWQjOS4iu+8jOmFjeWll+aUueWKqApkcml2ZXJzL2h3bW9uL21heDE2MDY1LmMJMAlUCeS4iua4uOWKoCBSRUFEX09OQ0XvvIznuq8gYnVnZml4CmRyaXZlcnMvaHdtb24vbWF4MTYwNjUuYwkxCVQJ5LiK5ri45ZCI5bm2IFVWL09WIGFsYXJt77yM57qvIGJ1Z2ZpeApkcml2ZXJzL2kyYy9idXNzZXMvaTJjLW10NjV4eC5jCTAJT1QJ5oiR5pa55YqgIE1USyDlj5jph48gKyDkuIrmuLjliqAgd3JpdGVfdGhlbl9yZWFk77yM5bm26ZuGCmRyaXZlcnMvcmVtb3RlcHJvYy9yZW1vdGVwcm9jX2NvcmUuYwkwCU8J5oiR5pa55paw5aKeIHJwcm9jX3NldF9maXJtd2FyZSDmlofmoaPms6jph4oKZHJpdmVycy9yZW1vdGVwcm9jL3JlbW90ZXByb2NfY29yZS5jCTEJTwnmiJHmlrnliqAgcnByb2NfcmVjb3Zlcnlfd3Eg5Yik56m677yM5q+U5LiK5ri45YGl5aOuCmRyaXZlcnMvcmVtb3RlcHJvYy9yZW1vdGVwcm9jX2NvcmUuYwkyCVQJ5LiK5ri46KGlIGFsbG9jIOWksei0pSByZXR1cm4gLUVOT01FTQpkcml2ZXJzL3JlbW90ZXByb2MvcmVtb3RlcHJvY19jb3JlLmMJMwlPCeaIkeaWuSBkZXN0cm95IOWJjeWIpOepugpkcml2ZXJzL3Njc2kvc2NzaV9lcnJvci5jCTAJVAnkuIrmuLjmlrDlop4gYnVzeSDorqHmlbDlj5jph48KZHJpdmVycy9zY3NpL3Njc2lfZXJyb3IuYwkxCVQJ5LiK5ri45L+uIGVoIHdha2V1cCDnq57mgIEKZHJpdmVycy9zY3NpL3Vmcy91ZnNoY2QuYwkwCVQJ5LiK5ri45YqgIHBtX29wX2luX3Byb2dyZXNzIOS/neaKpApkcml2ZXJzL3Njc2kvdWZzL3Vmc2hjZC5jCTEJTwnkv53ljoLllYYgVUZTIHJlc2V0IOeKtuaAgeacuu+8jOiusOW9leS4ouW8g+S4iua4uCBibG9ja19yZXF1ZXN0cwpkcml2ZXJzL3VzYi9nYWRnZXQvZnVuY3Rpb24vdV9hdWRpby5jCTAJTwnmiJHmlrkgMzk1IOihjOWOguWVhuWkp+aUue+8jOS4jeiDveimhueblgpkcml2ZXJzL3VzYi9nYWRnZXQvZnVuY3Rpb24vdV9hdWRpby5jCTEJTwnlkIzkuIrvvIzphY3lpZcgZnJlZSDmtYHnqIsKZHJpdmVycy91c2IvdHlwZWMvdGNwbS90Y3BjaV9tYXhpbS5jCTAJVAnkuIrmuLjooaXml6Xlv5fmjaLooYwKZHJpdmVycy91c2IvdHlwZWMvdWNzaS91Y3NpLmMJMAlUCeS4iua4uOWKoCBwcmV2X3JvbGUg6Lef6LiqCmluY2x1ZGUvbGludXgvYmxrX3R5cGVzLmgJMAlPCVJFUV9PUCDmnprkuL7lgLzlv4XpobvmlbTkvZPlr7npvZDvvIzkv53ljoLllYYgREVWSUNFX0NPUFk9MTgKaW5jbHVkZS9saW51eC9kZXZpY2UuaAkwCU9UCWFuZHJvaWRfa2FiaS5oIOS4jiBjbGVhbnVwLmgg6YO96KaBCmluY2x1ZGUvbGludXgvZGV2aWNlLmgJMQlPCUFORFJPSURfS0FCSV9SRVNFUlZFIOS4jeiDveaNouaIkOS4iua4uOaWsOWtl+aute+8jOWQpuWImeegtCBHS0kgQUJJCmluY2x1ZGUvbGludXgvZm9udC5oCTAJVAnkuIrmuLjlkIzml7bmlLnnsbvlnovlubbliqAgY2hhcmNvdW5077yM5Y+W5LiK5ri45Y2z5YyF5ZCr5oiR5pa55pS55YqoCmluY2x1ZGUvbGludXgvaHVnZXRsYi5oCTAJVAnkuIrmuLjlo7DmmI7lkKvmiJHmlrnpgqPmnaEKaW5jbHVkZS9saW51eC9odWdldGxiLmgJMQlUCeWQjOS4igppbmNsdWRlL2xpbnV4L2lycWRvbWFpbi5oCTAJTwnkv50gR0VOS1NZTVMgaGFja++8jOS4ouS4iua4uCBzdHJ1Y3QgaXJxX2RvbWFpbl9pbmZvCmluY2x1ZGUvbGludXgvbW1jL2hvc3QuaAkwCU8JS0FCSSByZXNlcnZlIOS8mOWFiO+8jE1USyDkuI3nlKggU0QgRXhwcmVzcwppbmNsdWRlL2xpbnV4L211dGV4LmgJMAlPVAlhbmRyb2lkX3ZlbmRvci5oIOS4jiBjbGVhbnVwLmgg6YO96KaBCmluY2x1ZGUvbGludXgvcmVndWxhdG9yL2RyaXZlci5oCTAJTwlLQUJJIHJlc2VydmUg5LyY5YWI77yM5Lii5LiK5ri4IGxhc3Rfb2ZmIOexu+Wei+iwg+aVtAppbmNsdWRlL2xpbnV4L3VzYi91c2JuZXQuaAkwCU8JS0FCSSByZXNlcnZlIOS8mOWFiAppbmNsdWRlL25ldC9ibHVldG9vdGgvaGNpX2NvcmUuaAkwCU9UCWFuZHJvaWRfa2FiaS5oIOS4jiBzcmN1Lmgg6YO96KaBCmluY2x1ZGUvbmV0L3NvY2suaAkwCU8JS0FCSSByZXNlcnZlIOS8mOWFiO+8jOS/nSBza19wZWVyX2xvY2sKbmV0L2lwdjQvYWg0LmMJMAlUCeS4iua4uCB4ZnJtX291dHB1dF9yZXN1bWUg5YqgIHNrYl90b19mdWxsX3NrCm5ldC9pcHY0L2VzcDQuYwkwCVQJ5LiK5ri4IEVTUC1pbi1UQ1Ag6ZSZ6K+v5aSE55CG5L+u5aSNCm5ldC9pcHY2L2FoNi5jCTAJVAnlkIwgYWg0Cm5ldC9pcHY2L2VzcDYuYwkwCVQJ5ZCMIGVzcDQKbmV0L2lwdjYveGZybTZfcG9saWN5LmMJMAlUCeS4iua4uOS/riBzYWRkciDlj5blgLwKbW0vS2NvbmZpZwkwCU9UCeaIkeaWuSBPUExVU19GRUFUVVJFX1BFUkZPUk1BTkNFX01NIOS4juS4iua4uCBLTUFQX0xPQ0FMIOW5tuWtmAptbS9odWdldGxiLmMJMAlUCeaIkeaWueS4uuepuu+8jOS4iua4uOaWsOWiniBodWdlX3BtZF91bnNoYXJlX2ZsdXNoCm1tL2h1Z2V0bGIuYwkxCVQJ5LiK5ri4IGh1Z2V0bGJfdW5zaGFyZV9wbWRzIOW4piB0YWtlX2xvY2tz77yM5pu05a6M5pW0Cm1tL2todWdlcGFnZWQuYwkwCU9UCeaIkeaWuSB2bV93cml0ZV9iZWdpbiDkuI7kuIrmuLggYW5vbl92bWEg5aSN5p+l5bm25a2YCm1tL2tzbS5jCTAJVAnkuIrmuLjmlLkgcHV0X3BhZ2XvvIzkv67lvJXnlKjorqHmlbAKbW0va3NtLmMJMQlUCeWQjOS4iumFjeWllwptbS9tbWFwLmMJMAlPVAnmiJHmlrkgQ09OVF9QVEVfSFVHRVBBR0Ug5LiO5LiK5ri4IHNwbGl0IOazqOmHiuW5tuWtmAptbS9tbWFwLmMJMQlPVAnmiJHmlrkgI2VuZGlmIOS4juS4iua4uCBodWdldGxiX3NwbGl0IOW5tuWtmAptbS9zbHViLmMJMAlUCeS4iua4uOWKoCBjaGVja192YWxpZF9wb2ludGVyIOagoemqjAptbS96c21hbGxvYy5jCTAJTwnkv50gTVRLIOeahCBfX0dGUF9DTUEg5qCH5b+X77yM5Lii5LiK5ri4IHphbGxvYwpmcy9wcm9jL2ZkLmMJMAlUCeS4iua4uOaUueeUqCBmZ2V0X3Rhc2sg6YGN5Y6GCmZzL3Byb2MvZmQuYwkxCVQJ5ZCM5LiK77yM5L+uIGZkIOS/oeaBr+azhOmcsgprZXJuZWwvYXVkaXRfZnNub3RpZnkuYwkwCVQJ5LiK5ri45L+uIGlub2Rl4oaSZGlyIOS8oOWPggprZXJuZWwvY2dyb3VwL2Nncm91cC5jCTAJVAnkuIrmuLjnlKggSU5JVF9XT1JLIOabv+aNouaJi+WGmSBwZW5kaW5nIGJpdAprZXJuZWwvdGltZS9wb3NpeC10aW1lcnMuYwkwCVQJ5LiK5ri45YqgIGNvbmRfcmVzY2hlZCDkuI4gLUVBR0FJTiDov5Tlm54KZnMvZjJmcy9kYXRhLmMJMAlPCWYyZnMg5pW05L2T5L+d5Y6C5ZWGCmZzL2YyZnMvZmlsZS5jCTAJTwlmMmZzIOaVtOS9k+S/neWOguWVhgpmcy9mMmZzL2ZpbGUuYwkxCU8JZjJmcyDmlbTkvZPkv53ljoLllYYKZnMvZjJmcy9maWxlLmMJMglPCWYyZnMg5pW05L2T5L+d5Y6C5ZWGCmZzL2YyZnMvZmlsZS5jCTMJTwlmMmZzIOaVtOS9k+S/neWOguWVhgpmcy9mMmZzL2ZpbGUuYwk0CU8JZjJmcyDmlbTkvZPkv53ljoLllYYKZnMvZjJmcy9maWxlLmMJNQlPCWYyZnMg5pW05L2T5L+d5Y6C5ZWGCmZzL2YyZnMvc2VnbWVudC5jCTAJTwlmMmZzIOaVtOS9k+S/neWOguWVhgpmcy9mMmZzL3N1cGVyLmMJMAlPCWYyZnMg5pW05L2T5L+d5Y6C5ZWGCmZzL2YyZnMvc3VwZXIuYwkxCU8JZjJmcyDmlbTkvZPkv53ljoLllYYKZnMvZjJmcy9zdXBlci5jCTIJTwlmMmZzIOaVtOS9k+S/neWOguWVhu+8jOS4ouS4iua4uCB4YXR0ciBjYWNoZQpmcy9mMmZzL3N1cGVyLmMJMwlPCWYyZnMg5pW05L2T5L+d5Y6C5ZWG77yM5Lii5LiK5ri4IHhhdHRyIGNhY2hlCmZzL2YyZnMvc3lzZnMuYwkwCU8JZjJmcyDmlbTkvZPkv53ljoLllYYKZnMvZjJmcy9zeXNmcy5jCTEJTwlmMmZzIOaVtOS9k+S/neWOguWVhgpmcy9mMmZzL3N5c2ZzLmMJMglPCWYyZnMg5pW05L2T5L+d5Y6C5ZWGCmZzL2YyZnMvc3lzZnMuYwkzCU8JZjJmcyDmlbTkvZPkv53ljoLllYYKYmxvY2svYmxrLXNldHRpbmdzLmMJMAlPCeS/nSBERVZJQ0VfWENPUFkg55qEIGthYmlfcmVzIOeUqOazlQphcmNoL2FybTY0L2tlcm5lbC9jcHVmZWF0dXJlLmMJMAlPVAnmiJHmlrkgTVRFIOWIneWni+WMluS4juS4iua4uCB6ZXJvLXBhZ2Ug5L+u5aSN5bm25a2YCmFyY2gvYXJtNjQva2VybmVsL2NwdWZlYXR1cmUuYwkxCU9UCeWQjOS4igphcmNoL2FybTY0L2tlcm5lbC9wcm90b24tcGFjay5jCTAJTwnkv53ljoLllYblt7Lpqozor4HnmoQgQkhCIOe8k+ino+mAu+i+kQphcmNoL2FybTY0L2tlcm5lbC9wcm90b24tcGFjay5jCTEJTwnlkIzkuIoKYXJjaC9hcm02NC9rZXJuZWwvcHJvdG9uLXBhY2suYwkyCU8J5ZCM5LiKCmFyY2gvYXJtNjQva2VybmVsL3Byb3Rvbi1wYWNrLmMJMwlPCeWQjOS4igphcmNoL2FybTY0L2tlcm5lbC9wcm90b24tcGFjay5jCTQJTwnlkIzkuIoKYXJjaC9hcm02NC9rZXJuZWwvcHJvdG9uLXBhY2suYwk1CU8J5ZCM5LiKCg=="
+  THEIRS_B64: "ZHJpdmVycy9tbWMvaG9zdC9zZGhjaS5jCgpkcml2ZXJzL3Njc2kvc2NzaV9saWIuYwoKZHJpdmVycy90dHkvc2VyaWFsL21heDMxMHguYwoKZHJpdmVycy91c2IvaG9zdC94aGNpLWh1Yi5jCgpmcy9jb3JlZHVtcC5jCgppbmNsdWRlL2xpbnV4L2JpbmZtdHMuaAoKaW5jbHVkZS9saW51eC9waWQuaAoKaW5jbHVkZS9saW51eC9yZW1vdGVwcm9jLmgKCmtlcm5lbC9icGYvY2dyb3VwLmMKCm5ldC9pcHY2L2lwNl90dW5uZWwuYwoKc2VjdXJpdHkvc2VjdXJpdHkuYwoK"
+  OURS_B64: "ZHJpdmVycy9iYXNlL3BsYXRmb3JtLmMKCmRyaXZlcnMvZmlybXdhcmUvZWZpL21va3Zhci10YWJsZS5jCgpkcml2ZXJzL3VzYi9ob3N0L3hoY2ktcmluZy5jCgpmcy9mMmZzL2YyZnMuaAoKZnMvZnMtd3JpdGViYWNrLmMKCmluY2x1ZGUvbmV0L2luZXRfY29ubmVjdGlvbl9zb2NrLmgKCm5ldC9pcHY0L3N5c2N0bF9uZXRfaXB2NC5jCgo="
+  PY_B64: "aW1wb3J0IG9zCgpkZWMgPSB7fQpmb3IgbGluZSBpbiBvcGVuKCdkZWNpc2lvbnMudHN2Jyk6CiAgICBwID0gbGluZS5yc3RyaXAoJ1xuJykuc3BsaXQoJ1x0JykKICAgIGlmIGxlbihwKSA+PSAzIGFuZCBwWzBdICE9ICdwYXRoJzoKICAgICAgICBkZWNbKHBbMF0sIGludChwWzFdKSldID0gcFsyXQoKZmlsZXMgPSBzb3J0ZWQoc2V0KGtbMF0gZm9yIGsgaW4gZGVjKSkKcmVzb2x2ZWQgPSAwCmZhaWxlZCA9IFtdCgpmb3IgcGF0aCBpbiBmaWxlczoKICAgIGlmIG5vdCBvcy5wYXRoLmlzZmlsZShwYXRoKToKICAgICAgICBjb250aW51ZQogICAgZGF0YSA9IG9wZW4ocGF0aCwgZW5jb2Rpbmc9J3V0Zi04JywgZXJyb3JzPSdzdXJyb2dhdGVlc2NhcGUnKS5yZWFkKCkKICAgIGxpbmVzID0gZGF0YS5zcGxpdCgnXG4nKQogICAgb3V0ID0gW10KICAgIGkgPSAwCiAgICBpZHggPSAwCiAgICBvayA9IFRydWUKICAgIHdoaWxlIGkgPCBsZW4obGluZXMpOgogICAgICAgIGlmIGxpbmVzW2ldLnN0YXJ0c3dpdGgoJzw8PDw8PDwgJyk6CiAgICAgICAgICAgIG8gPSBbXQogICAgICAgICAgICBiID0gW10KICAgICAgICAgICAgdCA9IFtdCiAgICAgICAgICAgIGkgKz0gMQogICAgICAgICAgICB3aGlsZSBpIDwgbGVuKGxpbmVzKSBhbmQgbm90IGxpbmVzW2ldLnN0YXJ0c3dpdGgoJ3x8fHx8fHwgJyk6CiAgICAgICAgICAgICAgICBvLmFwcGVuZChsaW5lc1tpXSk7IGkgKz0gMQogICAgICAgICAgICBpICs9IDEKICAgICAgICAgICAgd2hpbGUgaSA8IGxlbihsaW5lcykgYW5kIG5vdCBsaW5lc1tpXS5zdGFydHN3aXRoKCc9PT09PT09Jyk6CiAgICAgICAgICAgICAgICBiLmFwcGVuZChsaW5lc1tpXSk7IGkgKz0gMQogICAgICAgICAgICBpICs9IDEKICAgICAgICAgICAgd2hpbGUgaSA8IGxlbihsaW5lcykgYW5kIG5vdCBsaW5lc1tpXS5zdGFydHN3aXRoKCc+Pj4+Pj4+ICcpOgogICAgICAgICAgICAgICAgdC5hcHBlbmQobGluZXNbaV0pOyBpICs9IDEKICAgICAgICAgICAgaSArPSAxCiAgICAgICAgICAgIGQgPSBkZWMuZ2V0KChwYXRoLCBpZHgpKQogICAgICAgICAgICBpZiBkID09ICdPJzoKICAgICAgICAgICAgICAgIG91dC5leHRlbmQobykKICAgICAgICAgICAgZWxpZiBkID09ICdUJzoKICAgICAgICAgICAgICAgIG91dC5leHRlbmQodCkKICAgICAgICAgICAgZWxpZiBkID09ICdPVCc6CiAgICAgICAgICAgICAgICBvdXQuZXh0ZW5kKG8pOyBvdXQuZXh0ZW5kKHQpCiAgICAgICAgICAgIGVsaWYgZCA9PSAnVE8nOgogICAgICAgICAgICAgICAgb3V0LmV4dGVuZCh0KTsgb3V0LmV4dGVuZChvKQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgb3V0LmFwcGVuZCgnPDw8PDw8PCBvdXJzJyk7IG91dC5leHRlbmQobykKICAgICAgICAgICAgICAgIG91dC5hcHBlbmQoJ3x8fHx8fHwgYmFzZScpOyBvdXQuZXh0ZW5kKGIpCiAgICAgICAgICAgICAgICBvdXQuYXBwZW5kKCc9PT09PT09Jyk7IG91dC5leHRlbmQodCkKICAgICAgICAgICAgICAgIG91dC5hcHBlbmQoJz4+Pj4+Pj4gdGhlaXJzJykKICAgICAgICAgICAgICAgIG9rID0gRmFsc2UKICAgICAgICAgICAgaWR4ICs9IDEKICAgICAgICBlbHNlOgogICAgICAgICAgICBvdXQuYXBwZW5kKGxpbmVzW2ldKTsgaSArPSAxCiAgICBpZiBvazoKICAgICAgICBvcGVuKHBhdGgsICd3JywgZW5jb2Rpbmc9J3V0Zi04JywgZXJyb3JzPSdzdXJyb2dhdGVlc2NhcGUnKS53cml0ZSgnXG4nLmpvaW4ob3V0KSkKICAgICAgICByZXNvbHZlZCArPSAxCiAgICAgICAgcHJpbnQoJ3Jlc29sdmVkOicsIHBhdGgsICdibG9ja3M6JywgaWR4KQogICAgZWxzZToKICAgICAgICBmYWlsZWQuYXBwZW5kKHBhdGgpCiAgICAgICAgcHJpbnQoJ1BFTkRJTkc6JywgcGF0aCwgJ2Jsb2NrczonLCBpZHgpCgpwcmludCgnPT0gc3VtbWFyeSA9PScpCnByaW50KCdyZXNvbHZlZCBmaWxlczogJWQsIHBlbmRpbmcgZmlsZXM6ICVkJyAlIChyZXNvbHZlZCwgbGVuKGZhaWxlZCkpKQpmb3IgZiBpbiBmYWlsZWQ6CiAgICBwcmludCgnICBwZW5kaW5nOicsIGYpCg=="
+
 jobs:
   apply:
     runs-on: ubuntu-22.04
@@ -45,202 +51,30 @@ jobs:
           git checkout --conflict=diff3 -- . 2>/dev/null || true
           echo "initial conflicts: $(git diff --name-only --diff-filter=U | wc -l)"
 
-      - name: write decisions
+      - name: write payloads
         run: |
-          cat > decisions.tsv <<'TSVDATA'
-          path	idx	decision	reason
-          drivers/base/power/domain_governor.c	0	T	上游重写 CPU constraint 逻辑，我方是旧版
-          drivers/base/property.c	0	T	两边几乎一致，取上游新版
-          drivers/base/regmap/regmap.c	0	T	上游 bulk read/write 初始化修复，我方是旧代码
-          drivers/cpufreq/scmi-cpufreq.c	0	T	上游加 policy NULL 保护
-          drivers/cpufreq/scmi-cpufreq.c	1	T	同上，配套改动
-          drivers/hwmon/max16065.c	0	T	上游加 READ_ONCE，纯 bugfix
-          drivers/hwmon/max16065.c	1	T	上游合并 UV/OV alarm，纯 bugfix
-          drivers/i2c/busses/i2c-mt65xx.c	0	OT	我方加 MTK 变量 + 上游加 write_then_read，并集
-          drivers/remoteproc/remoteproc_core.c	0	O	我方新增 rproc_set_firmware 文档注释
-          drivers/remoteproc/remoteproc_core.c	1	O	我方加 rproc_recovery_wq 判空，比上游健壮
-          drivers/remoteproc/remoteproc_core.c	2	T	上游补 alloc 失败 return -ENOMEM
-          drivers/remoteproc/remoteproc_core.c	3	O	我方 destroy 前判空
-          drivers/scsi/scsi_error.c	0	T	上游新增 busy 计数变量
-          drivers/scsi/scsi_error.c	1	T	上游修 eh wakeup 竞态
-          drivers/scsi/ufs/ufshcd.c	0	T	上游加 pm_op_in_progress 保护
-          drivers/scsi/ufs/ufshcd.c	1	O	保厂商 UFS reset 状态机，记录丢弃上游 block_requests
-          drivers/usb/gadget/function/u_audio.c	0	O	我方 395 行厂商大改，不能覆盖
-          drivers/usb/gadget/function/u_audio.c	1	O	同上，配套 free 流程
-          drivers/usb/typec/tcpm/tcpci_maxim.c	0	T	上游补日志换行
-          drivers/usb/typec/ucsi/ucsi.c	0	T	上游加 prev_role 跟踪
-          include/linux/blk_types.h	0	O	REQ_OP 枚举值必须整体对齐，保厂商 DEVICE_COPY=18
-          include/linux/device.h	0	OT	android_kabi.h 与 cleanup.h 都要
-          include/linux/device.h	1	O	ANDROID_KABI_RESERVE 不能换成上游新字段，否则破 GKI ABI
-          include/linux/font.h	0	T	上游同时改类型并加 charcount，取上游即包含我方改动
-          include/linux/hugetlb.h	0	T	上游声明含我方那条
-          include/linux/hugetlb.h	1	T	同上
-          include/linux/irqdomain.h	0	O	保 GENKSYMS hack，丢上游 struct irq_domain_info
-          include/linux/mmc/host.h	0	O	KABI reserve 优先，MTK 不用 SD Express
-          include/linux/mutex.h	0	OT	android_vendor.h 与 cleanup.h 都要
-          include/linux/regulator/driver.h	0	O	KABI reserve 优先，丢上游 last_off 类型调整
-          include/linux/usb/usbnet.h	0	O	KABI reserve 优先
-          include/net/bluetooth/hci_core.h	0	OT	android_kabi.h 与 srcu.h 都要
-          include/net/sock.h	0	O	KABI reserve 优先，保 sk_peer_lock
-          net/ipv4/ah4.c	0	T	上游 xfrm_output_resume 加 skb_to_full_sk
-          net/ipv4/esp4.c	0	T	上游 ESP-in-TCP 错误处理修复
-          net/ipv6/ah6.c	0	T	同 ah4
-          net/ipv6/esp6.c	0	T	同 esp4
-          net/ipv6/xfrm6_policy.c	0	T	上游修 saddr 取值
-          mm/Kconfig	0	OT	我方 OPLUS_FEATURE_PERFORMANCE_MM 与上游 KMAP_LOCAL 并存
-          mm/hugetlb.c	0	T	我方为空，上游新增 huge_pmd_unshare_flush
-          mm/hugetlb.c	1	T	上游 hugetlb_unshare_pmds 带 take_locks，更完整
-          mm/khugepaged.c	0	OT	我方 vm_write_begin 与上游 anon_vma 复查并存
-          mm/ksm.c	0	T	上游改 put_page，修引用计数
-          mm/ksm.c	1	T	同上配套
-          mm/mmap.c	0	OT	我方 CONT_PTE_HUGEPAGE 与上游 split 注释并存
-          mm/mmap.c	1	OT	我方 #endif 与上游 hugetlb_split 并存
-          mm/slub.c	0	T	上游加 check_valid_pointer 校验
-          mm/zsmalloc.c	0	O	保 MTK 的 __GFP_CMA 标志，丢上游 zalloc
-          fs/proc/fd.c	0	T	上游改用 fget_task 遍历
-          fs/proc/fd.c	1	T	同上，修 fd 信息泄露
-          kernel/audit_fsnotify.c	0	T	上游修 inode→dir 传参
-          kernel/cgroup/cgroup.c	0	T	上游用 INIT_WORK 替换手写 pending bit
-          kernel/time/posix-timers.c	0	T	上游加 cond_resched 与 -EAGAIN 返回
-          fs/f2fs/data.c	0	O	f2fs 整体保厂商
-          fs/f2fs/file.c	0	O	f2fs 整体保厂商
-          fs/f2fs/file.c	1	O	f2fs 整体保厂商
-          fs/f2fs/file.c	2	O	f2fs 整体保厂商
-          fs/f2fs/file.c	3	O	f2fs 整体保厂商
-          fs/f2fs/file.c	4	O	f2fs 整体保厂商
-          fs/f2fs/file.c	5	O	f2fs 整体保厂商
-          fs/f2fs/segment.c	0	O	f2fs 整体保厂商
-          fs/f2fs/super.c	0	O	f2fs 整体保厂商
-          fs/f2fs/super.c	1	O	f2fs 整体保厂商
-          fs/f2fs/super.c	2	O	f2fs 整体保厂商，丢上游 xattr cache
-          fs/f2fs/super.c	3	O	f2fs 整体保厂商，丢上游 xattr cache
-          fs/f2fs/sysfs.c	0	O	f2fs 整体保厂商
-          fs/f2fs/sysfs.c	1	O	f2fs 整体保厂商
-          fs/f2fs/sysfs.c	2	O	f2fs 整体保厂商
-          fs/f2fs/sysfs.c	3	O	f2fs 整体保厂商
-          block/blk-settings.c	0	O	保 DEVICE_XCOPY 的 kabi_res 用法
-          arch/arm64/kernel/cpufeature.c	0	OT	我方 MTE 初始化与上游 zero-page 修复并存
-          arch/arm64/kernel/cpufeature.c	1	OT	同上
-          arch/arm64/kernel/proton-pack.c	0	O	保厂商已验证的 BHB 缓解逻辑
-          arch/arm64/kernel/proton-pack.c	1	O	同上
-          arch/arm64/kernel/proton-pack.c	2	O	同上
-          arch/arm64/kernel/proton-pack.c	3	O	同上
-          arch/arm64/kernel/proton-pack.c	4	O	同上
-          arch/arm64/kernel/proton-pack.c	5	O	同上
-TSVDATA
-          cat > theirs.txt <<'THEIRSDATA'
-          drivers/mmc/host/sdhci.c
-          
-          drivers/scsi/scsi_lib.c
-          
-          drivers/tty/serial/max310x.c
-          
-          drivers/usb/host/xhci-hub.c
-          
-          fs/coredump.c
-          
-          include/linux/binfmts.h
-          
-          include/linux/pid.h
-          
-          include/linux/remoteproc.h
-          
-          kernel/bpf/cgroup.c
-          
-          net/ipv6/ip6_tunnel.c
-          
-          security/security.c
-          
-THEIRSDATA
-          cat > ours.txt <<'OURSDATA'
-          drivers/base/platform.c
-          
-          drivers/firmware/efi/mokvar-table.c
-          
-          drivers/usb/host/xhci-ring.c
-          
-          fs/f2fs/f2fs.h
-          
-          fs/fs-writeback.c
-          
-          include/net/inet_connection_sock.h
-          
-          net/ipv4/sysctl_net_ipv4.c
-          
-OURSDATA
-          echo "decisions: $(($(wc -l < decisions.tsv)-1))"
+          echo "$DEC_B64" | base64 -d > decisions.tsv
+          echo "$THEIRS_B64" | base64 -d > theirs.txt
+          echo "$OURS_B64" | base64 -d > ours.txt
+          echo "$PY_B64" | base64 -d > apply_block.py
+          sed -i '/^[[:space:]]*$/d' theirs.txt ours.txt
+          echo "decisions: $(($(wc -l < decisions.tsv)-1)), theirs: $(wc -l < theirs.txt), ours: $(wc -l < ours.txt)"
+          head -2 decisions.tsv
+          python3 -c "print('py ok', len(open('apply_block.py').read()))"
 
       - name: apply whole-file policy
         run: |
-          sed -i '/^\s*$/d' theirs.txt ours.txt
           xargs -a theirs.txt git checkout --theirs -- 2>/dev/null || true
           xargs -a theirs.txt git add -- 2>/dev/null || true
           xargs -a ours.txt git checkout --ours -- 2>/dev/null || true
           xargs -a ours.txt git add -- 2>/dev/null || true
+          echo "after whole-file: $(git diff --name-only --diff-filter=U | wc -l)"
 
       - name: apply block decisions
         run: |
-          python3 - <<'PYCODE'
-          import os
-          dec = {}
-          for line in open('decisions.tsv'):
-              p = line.rstrip('\n').split('\t')
-              if len(p) >= 3 and p[0] != 'path':
-                  dec[(p[0], int(p[1]))] = p[2]
-          files = sorted(set(k[0] for k in dec))
-          resolved = 0
-          failed = []
-          for path in files:
-              if not os.path.isfile(path):
-                  continue
-              data = open(path, encoding='utf-8', errors='surrogateescape').read()
-              lines = data.split('\n')
-              out = []
-              i = 0
-              idx = 0
-              ok = True
-              while i < len(lines):
-                  if lines[i].startswith('<<<<<<< '):
-                      o = []; b = []; t = []
-                      i += 1
-                      while i < len(lines) and not lines[i].startswith('||||||| '):
-                          o.append(lines[i]); i += 1
-                      i += 1
-                      while i < len(lines) and not lines[i].startswith('======='):
-                          b.append(lines[i]); i += 1
-                      i += 1
-                      while i < len(lines) and not lines[i].startswith('>>>>>>> '):
-                          t.append(lines[i]); i += 1
-                      i += 1
-                      d = dec.get((path, idx))
-                      if d == 'O':
-                          out.extend(o)
-                      elif d == 'T':
-                          out.extend(t)
-                      elif d == 'OT':
-                          out.extend(o); out.extend(t)
-                      elif d == 'TO':
-                          out.extend(t); out.extend(o)
-                      else:
-                          out.append('<<<<<<< ours'); out.extend(o)
-                          out.append('||||||| base'); out.extend(b)
-                          out.append('======='); out.extend(t)
-                          out.append('>>>>>>> theirs')
-                          ok = False
-                      idx += 1
-                  else:
-                      out.append(lines[i]); i += 1
-              if ok:
-                  open(path, 'w', encoding='utf-8', errors='surrogateescape').write('\n'.join(out))
-                  resolved += 1
-              else:
-                  failed.append(path)
-          print('resolved files: %d, pending: %d' % (resolved, len(failed)))
-          for f in failed:
-              print('  pending:', f)
-PYCODE
+          python3 apply_block.py
           git diff --name-only --diff-filter=U | sort > unresolved.txt || true
-          echo "=== remaining conflicts ==="
+          echo "=== remaining ==="
           wc -l < unresolved.txt
           cat unresolved.txt
 
@@ -254,10 +88,10 @@ PYCODE
             git branch -f lts-272 HEAD
             git push -f origin lts-272
             echo "PUSHED lts-272"
-            git log -1 --format='%H %s'
+            git log -1 --format="%H %s"
             git diff --shortstat HEAD~1 HEAD || true
           else
-            echo "not committed, $N conflicts left"
+            echo "not committed"
           fi
 
       - name: publish
