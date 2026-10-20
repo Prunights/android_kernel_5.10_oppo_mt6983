@@ -1,0 +1,4 @@
+drivers/dma/mediatek/mtk-uart-apdma.c
+drivers/media/platform/mtk-vcodec/mtk_vcodec_fw_scp.c
+drivers/media/platform/mtk-vcodec/venc/venc_h264_if.c
+drivers/usb/typec/tcpm/tcpm.c
