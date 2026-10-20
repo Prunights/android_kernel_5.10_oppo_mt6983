@@ -33,10 +33,12 @@ jobs:
       - name: 拉上游
         run: |
           git remote add upstream https://github.com/gregkh/linux.git || true
-          time git fetch --no-tags --filter=blob:none upstream "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+          time git fetch --no-tags upstream "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
           git log -1 --format='上游 %h %s' "${{ inputs.upstream_tag }}"
           echo "merge-base: $(git merge-base HEAD ${{ inputs.upstream_tag }})"
           git log -1 --format='共同祖先 %h %ci %s' "$(git merge-base HEAD ${{ inputs.upstream_tag }})"
+          git count-objects -vH | grep -E 'size-pack|count'
+          df -h / | tail -1
 
       - name: 执行合并
         id: merge
@@ -54,6 +56,12 @@ jobs:
           N=$(wc -l < conflicts.txt)
           echo "conflicts=$N" >> $GITHUB_OUTPUT
           echo "===== 冲突文件数: $N ====="
+
+          if grep -qiE 'fatal|error:' merge.log; then
+            echo "!!!!! 合并过程出现 fatal，上面的数字无效 !!!!!"
+            grep -iE 'fatal|error:' merge.log | head -5
+            echo "INVALID" > merge_failed.marker
+          fi
 
           echo "===== 按目录 Top20 ====="
           awk -F/ '{if(NF>2) print $1"/"$2"/"$3; else print $0}' conflicts.txt | sort | uniq -c | sort -rn | head -20
@@ -86,6 +94,7 @@ jobs:
           mkdir -p /tmp/res
           cp conflicts.txt /tmp/res/ 2>/dev/null || echo "(无 conflicts.txt)" > /tmp/res/conflicts.txt
           cp merge.log /tmp/res/ 2>/dev/null || echo "(无 merge.log)" > /tmp/res/merge.log
+          cp merge_failed.marker /tmp/res/ 2>/dev/null || true
           cd /tmp/res
           git init -q .
           git config user.email ci@local
