@@ -7,7 +7,9 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/scatterlist.h>
+#ifndef __GENKSYMS__
 #include <linux/blk-cgroup.h>
+#endif
 
 #include <trace/events/block.h>
 
@@ -314,6 +316,10 @@ void __blk_queue_split(struct bio **bio, unsigned int *nr_segs)
 		split = blk_bio_write_same_split(q, *bio, &q->bio_split,
 				nr_segs);
 		break;
+#ifdef CONFIG_DEVICE_XCOPY
+	case REQ_OP_DEVICE_COPY:
+		break;
+#endif
 	default:
 		/*
 		 * All drivers must accept single-segments bios that are <=
@@ -390,6 +396,10 @@ unsigned int blk_recalc_rq_segments(struct request *rq)
 		return 0;
 	case REQ_OP_WRITE_SAME:
 		return 1;
+#ifdef CONFIG_DEVICE_XCOPY
+	case REQ_OP_DEVICE_COPY:
+		return 0;
+#endif
 	}
 
 	rq_for_each_bvec(bv, rq, iter)
@@ -808,7 +818,7 @@ static struct request *attempt_merge(struct request_queue *q,
 	 */
 	blk_account_io_merge_request(next);
 
-	trace_block_rq_merge(next);
+	trace_block_rq_merge(q, next);
 
 	/*
 	 * ownership of bio passed from next to req, return 'next' for

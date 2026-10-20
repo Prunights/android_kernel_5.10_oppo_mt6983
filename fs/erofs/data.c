@@ -21,6 +21,15 @@ static void erofs_readendio(struct bio *bio)
 		/* page is already locked */
 		DBG_BUGON(PageUptodate(page));
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (PageCont(page)) {
+			if (err)
+				SetPageError(page);
+
+			set_cont_pte_uptodate_and_unlock(page);
+			continue;
+		}
+#endif
 		if (err)
 			SetPageError(page);
 		else
@@ -109,21 +118,6 @@ err_out:
 	return err;
 }
 
-int erofs_map_blocks(struct inode *inode,
-		     struct erofs_map_blocks *map, int flags)
-{
-	if (erofs_inode_is_data_compressed(EROFS_I(inode)->datalayout)) {
-		int err = z_erofs_map_blocks_iter(inode, map, flags);
-
-		if (map->mpage) {
-			put_page(map->mpage);
-			map->mpage = NULL;
-		}
-		return err;
-	}
-	return erofs_map_blocks_flatmode(inode, map, flags);
-}
-
 static inline struct bio *erofs_read_raw_page(struct bio *bio,
 					      struct address_space *mapping,
 					      struct page *page,
@@ -159,15 +153,19 @@ submit_bio_retry:
 		erofs_blk_t blknr;
 		unsigned int blkoff;
 
-		err = erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW);
+		err = erofs_map_blocks_flatmode(inode, &map, EROFS_GET_BLOCKS_RAW);
 		if (err)
 			goto err_out;
 
 		/* zero out the holed page */
 		if (!(map.m_flags & EROFS_MAP_MAPPED)) {
 			zero_user_segment(page, 0, PAGE_SIZE);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (!PageCont(page))
+				SetPageUptodate(page);
+#else
 			SetPageUptodate(page);
-
+#endif
 			/* imply err = 0, see erofs_map_blocks */
 			goto has_updated;
 		}
@@ -250,7 +248,14 @@ err_out:
 		ClearPageUptodate(page);
 	}
 has_updated:
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (!PageCont(page))
+		unlock_page(page);
+	else
+		set_cont_pte_uptodate_and_unlock(page);
+#else
 	unlock_page(page);
+#endif
 
 	/* if updated manually, continuous pages has a gap */
 	if (bio)
@@ -269,6 +274,15 @@ static int erofs_raw_access_readpage(struct file *file, struct page *page)
 	struct bio *bio;
 
 	trace_erofs_readpage(page, true);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* FIXME: Probe the page twice readpage! */
+	if (PageCont(page))
+		CHP_BUG_ON(TestSetPageContIODoing(page));
+
+	/* FIXME: Detected the endio bug twice! */
+	CHP_BUG_ON(ContPteHugePage(page) || PageContUptodate(page));
+#endif
 
 	bio = erofs_read_raw_page(NULL, page->mapping,
 				  page, &last_block, 1, false);
@@ -291,6 +305,15 @@ static void erofs_raw_access_readahead(struct readahead_control *rac)
 
 	while ((page = readahead_page(rac))) {
 		prefetchw(&page->flags);
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		/* FIXME: Probe the page twice readpage! */
+		if (PageCont(page))
+			CHP_BUG_ON(TestSetPageContIODoing(page));
+
+		/* FIXME: Detected the endio bug twice! */
+		CHP_BUG_ON(ContPteHugePage(page) || PageContUptodate(page));
+#endif
 
 		bio = erofs_read_raw_page(bio, rac->mapping, page, &last_block,
 				readahead_count(rac), true);
@@ -326,7 +349,7 @@ static sector_t erofs_bmap(struct address_space *mapping, sector_t block)
 			return 0;
 	}
 
-	if (!erofs_map_blocks(inode, &map, EROFS_GET_BLOCKS_RAW))
+	if (!erofs_map_blocks_flatmode(inode, &map, EROFS_GET_BLOCKS_RAW))
 		return erofs_blknr(map.m_pa);
 
 	return 0;

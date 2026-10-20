@@ -28,6 +28,7 @@
 #include <linux/refcount.h>
 #include <linux/part_stat.h>
 #include <linux/blk-crypto.h>
+#include <linux/keyslot-manager.h>
 
 #define DM_MSG_PREFIX "core"
 
@@ -972,6 +973,24 @@ void disable_write_same(struct mapped_device *md)
 	limits->max_write_same_sectors = 0;
 }
 
+#ifdef CONFIG_DEVICE_XCOPY
+/* work for debug */
+void disable_device_copy(struct mapped_device *md)
+{
+	struct queue_limits *limits = dm_get_queue_limits(md);
+	struct para_limit *para = (struct para_limit *) limits->android_kabi_reserved1;
+
+	/* device doesn't really support device copy, disable it */
+	if (para) {
+		para->max_copy_blks = 0;
+		para->min_copy_blks = 0;
+		para->max_copy_entr = 0;
+	} else
+		DMWARN("%s limits not alloc.", __func__);
+	DMWARN("XCOPY parameters error, so set to zero.");
+}
+#endif
+
 void disable_write_zeroes(struct mapped_device *md)
 {
 	struct queue_limits *limits = dm_get_queue_limits(md);
@@ -993,6 +1012,10 @@ static void clone_endio(struct bio *bio)
 	struct mapped_device *md = tio->io->md;
 	dm_endio_fn endio = tio->ti->type->end_io;
 	struct bio *orig_bio = io->orig_bio;
+#ifdef CONFIG_DEVICE_XCOPY
+	struct para_limit *limit =
+		(struct para_limit *)bio->bi_disk->queue->limits.android_kabi_reserved1;
+#endif
 
 	if (unlikely(error == BLK_STS_TARGET)) {
 		if (bio_op(bio) == REQ_OP_DISCARD &&
@@ -1004,6 +1027,12 @@ static void clone_endio(struct bio *bio)
 		else if (bio_op(bio) == REQ_OP_WRITE_ZEROES &&
 			 !bio->bi_disk->queue->limits.max_write_zeroes_sectors)
 			disable_write_zeroes(md);
+#ifdef CONFIG_DEVICE_XCOPY
+		else if (bio_op(bio) == REQ_OP_DEVICE_COPY &&
+			 limit && !limit->max_copy_blks &&
+			 !limit->min_copy_blks && !limit->max_copy_entr)
+			disable_device_copy(md);
+#endif
 	}
 
 	/*
@@ -1579,6 +1608,11 @@ static bool __process_abnormal_io(struct clone_info *ci, struct dm_target *ti,
 	case REQ_OP_WRITE_ZEROES:
 		num_bios = ti->num_write_zeroes_bios;
 		break;
+#ifdef CONFIG_DEVICE_XCOPY
+	case REQ_OP_DEVICE_COPY:
+		num_bios = 1;
+		break;
+#endif
 	default:
 		return false;
 	}
@@ -1621,6 +1655,10 @@ static void init_clone_info(struct clone_info *ci, struct mapped_device *md,
 	ci->map = map;
 	ci->io = alloc_io(md, bio);
 	ci->sector = bio->bi_iter.bi_sector;
+#ifdef CONFIG_DEVICE_XCOPY
+	if (op_is_copy(bio->bi_opf))
+		ci->sector = 0;
+#endif
 }
 
 #define __dm_part_stat_sub(part, field, subnd)	\
@@ -1782,6 +1820,19 @@ static const struct dax_operations dm_dax_ops;
 
 static void dm_wq_work(struct work_struct *work);
 
+#ifdef CONFIG_BLK_INLINE_ENCRYPTION
+static void dm_queue_destroy_keyslot_manager(struct request_queue *q)
+{
+	dm_destroy_keyslot_manager(q->ksm);
+}
+
+#else /* CONFIG_BLK_INLINE_ENCRYPTION */
+
+static inline void dm_queue_destroy_keyslot_manager(struct request_queue *q)
+{
+}
+#endif /* !CONFIG_BLK_INLINE_ENCRYPTION */
+
 static void cleanup_mapped_device(struct mapped_device *md)
 {
 	if (md->wq)
@@ -1803,8 +1854,10 @@ static void cleanup_mapped_device(struct mapped_device *md)
 		put_disk(md->disk);
 	}
 
-	if (md->queue)
+	if (md->queue) {
+		dm_queue_destroy_keyslot_manager(md->queue);
 		blk_cleanup_queue(md->queue);
+	}
 
 	cleanup_srcu_struct(&md->io_barrier);
 
@@ -2463,27 +2516,19 @@ static int lock_fs(struct mapped_device *md)
 {
 	int r;
 
-	WARN_ON(md->frozen_sb);
+	WARN_ON(test_bit(DMF_FROZEN, &md->flags));
 
-	md->frozen_sb = freeze_bdev(md->bdev);
-	if (IS_ERR(md->frozen_sb)) {
-		r = PTR_ERR(md->frozen_sb);
-		md->frozen_sb = NULL;
-		return r;
-	}
-
-	set_bit(DMF_FROZEN, &md->flags);
-
-	return 0;
+	r = freeze_bdev(md->bdev);
+	if (!r)
+		set_bit(DMF_FROZEN, &md->flags);
+	return r;
 }
 
 static void unlock_fs(struct mapped_device *md)
 {
 	if (!test_bit(DMF_FROZEN, &md->flags))
 		return;
-
-	thaw_bdev(md->bdev, md->frozen_sb);
-	md->frozen_sb = NULL;
+	thaw_bdev(md->bdev);
 	clear_bit(DMF_FROZEN, &md->flags);
 }
 

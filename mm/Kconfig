@@ -2,6 +2,17 @@
 
 menu "Memory Management options"
 
+config MTK_KASAN_MEMBLOCK_SKIP
+	bool "mtk kasan memblock skip"
+	depends on KASAN
+	help
+	  This option allows memblock.o to skip kasan/khwasan
+	  sanitize checks. Kasan shadow memory initialization
+	  uses memblock to allocate page and checks every page.
+
+	  Users select this option to speed up kasan shadow
+	  initialization when system boots.
+
 config SELECT_MEMORY_MODEL
 	def_bool y
 	depends on ARCH_SELECT_MEMORY_MODEL
@@ -513,6 +524,13 @@ config CMA_DEBUGFS
 	help
 	  Turns on the DebugFS interface for CMA.
 
+config CMA_SYSFS
+	bool "CMA information through sysfs interface"
+	depends on CMA && SYSFS
+	help
+	  This option exposes some sysfs attributes to get information
+	  from CMA.
+
 config CMA_AREAS
 	int "Maximum count of the CMA areas"
 	depends on CMA
@@ -749,10 +767,18 @@ config DEFERRED_STRUCT_PAGE_INIT
 	  lifetime of the system until these kthreads finish the
 	  initialisation.
 
+config PAGE_IDLE_FLAG
+	bool
+	select PAGE_EXTENSION if !64BIT
+	help
+	  This adds PG_idle and PG_young flags to 'struct page'.  PTE Accessed
+	  bit writers can set the state of the bit in the flags so that PTE
+	  Accessed bit readers may avoid disturbance.
+
 config IDLE_PAGE_TRACKING
 	bool "Enable idle page tracking"
 	depends on SYSFS && MMU
-	select PAGE_EXTENSION if !64BIT
+	select PAGE_IDLE_FLAG
 	help
 	  This feature allows to estimate the amount of user pages that have
 	  not been touched during a given period of time. This information can
@@ -821,6 +847,28 @@ config PERCPU_STATS
 	  information includes global and per chunk statistics, which can
 	  be used to help understand percpu memory usage.
 
+config ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+       def_bool n
+
+config SPECULATIVE_PAGE_FAULT
+       bool "Speculative page faults"
+       default y
+       depends on ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
+       depends on MMU && SMP && !NUMA
+       help
+         Try to handle user space page faults without holding the mmap_sem.
+
+	 This should allow better concurrency for massively threaded process
+	 since the page fault handler will not wait for other threads memory
+	 layout change to be done, assuming that this change is done in another
+	 part of the process's memory space. This type of page fault is named
+	 speculative page fault.
+
+	 If the speculative page fault fails because of a concurrency is
+	 detected or because underlying PMD or PTE tables are not yet
+	 allocating, it is failing its processing and a classic page fault
+	 is then tried.
+
 config GUP_BENCHMARK
 	bool "Enable infrastructure for get_user_pages() and related calls benchmarking"
 	help
@@ -858,5 +906,39 @@ config ARCH_HAS_HUGEPD
 
 config MAPPING_DIRTY_HELPERS
         bool
+
+#ifdef OPLUS_FEATURE_PERFORMANCE_MM
+source "mm/oplus_mm/Kconfig"
+#endif /* OPLUS_FEATURE_PERFORMANCE_MM */
+source "mm/damon/Kconfig"
+
+config CONT_PTE_HUGEPAGE
+	bool "Cont Pte Hugepage support"
+	default y
+	depends on ARM64 && TRANSPARENT_HUGEPAGE
+	help
+	  Try to THP-like Hugepages based on ARM64 cont-pte.
+
+config CONT_PTE_HUGEPAGE_ON_EXT4
+	bool "Cont Pte Hugepage support on EXT4"
+	default n
+	depends on CONT_PTE_HUGEPAGE
+	help
+	  Try to THP-like Hugepages based on ARM64 cont-pte on ext4
+
+config CONT_PTE_HUGEPAGE_ON_QEMU
+	bool "Cont Pte Hugepage support on QEMU"
+	default n
+	depends on CONT_PTE_HUGEPAGE
+	help
+	  QEMU debugging of ContPte hugepage
+
+config CONT_PTE_HUGEPAGE_64K_ZRAM
+	bool "Cont Pte Hugepage support 64K ZRAM"
+	default y
+	depends on CONT_PTE_HUGEPAGE
+
+	help
+	  Cont Pte Hugepage support 64K ZRAM
 
 endmenu

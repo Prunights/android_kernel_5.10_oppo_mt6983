@@ -51,6 +51,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/ipi.h>
 
+EXPORT_TRACEPOINT_SYMBOL_GPL(ipi_raise);
+EXPORT_TRACEPOINT_SYMBOL_GPL(ipi_entry);
+EXPORT_TRACEPOINT_SYMBOL_GPL(ipi_exit);
+
 /*
  * as from 2.5, kernels no longer have an init_tasks structure
  * so we need some other way of telling a new secondary core
@@ -261,7 +265,6 @@ int __cpu_disable(void)
 #ifdef CONFIG_GENERIC_ARCH_TOPOLOGY
 	remove_cpu_topology(cpu);
 #endif
-
 	/*
 	 * Take this CPU offline.  Once we clear this, we can't return,
 	 * and we must not schedule until we're ready to give up the cpu.
@@ -737,6 +740,10 @@ void __init set_smp_ipi_range(int ipi_base, int n)
 
 		ipi_desc[i] = irq_to_desc(ipi_base + i);
 		irq_set_status_flags(ipi_base + i, IRQ_HIDDEN);
+
+		/* The recheduling IPI is special... */
+		if (i == IPI_RESCHEDULE)
+			__irq_modify_status(ipi_base + i, 0, IRQ_RAW, ~0);
 	}
 
 	ipi_irq_base = ipi_base;
@@ -859,3 +866,15 @@ void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
 {
 	nmi_trigger_cpumask_backtrace(mask, exclude_self, raise_nmi);
 }
+
+int nr_ipi_get(void)
+{
+	return nr_ipi;
+}
+EXPORT_SYMBOL_GPL(nr_ipi_get);
+
+struct irq_desc **ipi_desc_get(void)
+{
+	return ipi_desc;
+}
+EXPORT_SYMBOL_GPL(ipi_desc_get);

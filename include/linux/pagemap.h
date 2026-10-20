@@ -15,8 +15,16 @@
 #include <linux/bitops.h>
 #include <linux/hardirq.h> /* for in_interrupt() */
 #include <linux/hugetlb_inline.h>
+#include <linux/sched/debug.h>
 
 struct pagevec;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static inline bool mapping_empty(struct address_space *mapping)
+{
+	return xa_empty(&mapping->i_pages);
+}
+#endif
 
 /*
  * Bits in mapping->flags.
@@ -128,7 +136,7 @@ static inline bool mapping_thp_support(struct address_space *mapping)
 
 static inline int filemap_nr_thps(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	return atomic_read(&mapping->nr_thps);
 #else
 	return 0;
@@ -137,7 +145,7 @@ static inline int filemap_nr_thps(struct address_space *mapping)
 
 static inline void filemap_nr_thps_inc(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	if (!mapping_thp_support(mapping))
 		atomic_inc(&mapping->nr_thps);
 #else
@@ -147,7 +155,7 @@ static inline void filemap_nr_thps_inc(struct address_space *mapping)
 
 static inline void filemap_nr_thps_dec(struct address_space *mapping)
 {
-#ifdef CONFIG_READ_ONLY_THP_FOR_FS
+#if defined(CONFIG_READ_ONLY_THP_FOR_FS) || defined(CONFIG_CONT_PTE_HUGEPAGE)
 	if (!mapping_thp_support(mapping))
 		atomic_dec(&mapping->nr_thps);
 #else
@@ -295,10 +303,7 @@ static inline struct page *page_cache_alloc(struct address_space *x)
 	return __page_cache_alloc(mapping_gfp_mask(x));
 }
 
-static inline gfp_t readahead_gfp_mask(struct address_space *x)
-{
-	return mapping_gfp_mask(x) | __GFP_NORETRY | __GFP_NOWARN;
-}
+gfp_t readahead_gfp_mask(struct address_space *x);
 
 typedef int filler_t(void *, struct page *);
 
@@ -555,8 +560,8 @@ static inline pgoff_t linear_page_index(struct vm_area_struct *vma,
 	pgoff_t pgoff;
 	if (unlikely(is_vm_hugetlb_page(vma)))
 		return linear_hugepage_index(vma, address);
-	pgoff = (address - vma->vm_start) >> PAGE_SHIFT;
-	pgoff += vma->vm_pgoff;
+	pgoff = (address - READ_ONCE(vma->vm_start)) >> PAGE_SHIFT;
+	pgoff += READ_ONCE(vma->vm_pgoff);
 	return pgoff;
 }
 
@@ -597,6 +602,19 @@ extern void unlock_page(struct page *page);
  */
 static inline int trylock_page(struct page *page)
 {
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && defined(CONFIG_CONT_PTE_HUGEPAGE_DEBUG)
+	/* for debugging, detect those gettings subpages' lock */
+#define PG_cont (__NR_PAGEFLAGS + 4)
+#define PageCont(page) test_bit(PG_cont, &(page)->flags)
+
+	if (PageCont(page) && !PageCompound(page) && !IS_ALIGNED(page_to_pfn(page), CONT_PTES)) {
+		pr_err("@@@%s on subpage index:%lx-%lx page:%lx head:%lx comm:%s\n",
+		       __func__, page->index, compound_head(page)->index,
+		       (unsigned long)page, (unsigned long)compound_head(page),
+		       current->comm);
+		WARN_ON(1);
+	}
+#endif
 	page = compound_head(page);
 	return (likely(!test_and_set_bit_lock(PG_locked, &page->flags)));
 }
@@ -604,7 +622,7 @@ static inline int trylock_page(struct page *page)
 /*
  * lock_page may only be called if we have the page's inode pinned.
  */
-static inline void lock_page(struct page *page)
+static inline __sched void lock_page(struct page *page)
 {
 	might_sleep();
 	if (!trylock_page(page))
@@ -616,7 +634,7 @@ static inline void lock_page(struct page *page)
  * signals.  It returns 0 if it locked the page and -EINTR if it was
  * killed while waiting.
  */
-static inline int lock_page_killable(struct page *page)
+static inline __sched int lock_page_killable(struct page *page)
 {
 	might_sleep();
 	if (!trylock_page(page))
@@ -632,7 +650,7 @@ static inline int lock_page_killable(struct page *page)
  * Returns 0 if the page is locked successfully, or -EIOCBQUEUED if the page
  * was already locked and the callback defined in 'wait' was queued.
  */
-static inline int lock_page_async(struct page *page,
+static inline __sched int lock_page_async(struct page *page,
 				  struct wait_page_queue *wait)
 {
 	if (!trylock_page(page))
@@ -647,13 +665,42 @@ static inline int lock_page_async(struct page *page,
  * Return value and mmap_lock implications depend on flags; see
  * __lock_page_or_retry().
  */
-static inline int lock_page_or_retry(struct page *page, struct mm_struct *mm,
+static inline __sched int lock_page_or_retry(struct page *page, struct mm_struct *mm,
 				     unsigned int flags)
 {
 	might_sleep();
 	return trylock_page(page) || __lock_page_or_retry(page, mm, flags);
 }
 
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+static inline __sched int lock_nr_pages_or_retry(struct page **page, struct mm_struct *mm,
+				     unsigned int flags, int nr)
+{
+	int i, ret;
+
+	might_sleep();
+
+	for (i = 0; i < nr; i++) {
+		ret = trylock_page(page[i]);
+		if (ret)
+			continue;
+
+		ret = __lock_page_or_retry(page[i], mm, flags);
+		if (!ret)
+			break;
+	}
+
+	if (!ret && i) {
+		for (i--; i >= 0; i--) {
+			CHP_BUG_ON(!PageLocked(page[i]));
+			unlock_page(page[i]);
+		}
+	}
+
+	return ret;
+}
+#endif
 /*
  * This is exported only for wait_on_page_locked/wait_on_page_writeback, etc.,
  * and should not be used directly.
@@ -668,13 +715,13 @@ extern int wait_on_page_bit_killable(struct page *page, int bit_nr);
  * ie with increased "page->count" so that the page won't
  * go away during the wait..
  */
-static inline void wait_on_page_locked(struct page *page)
+static inline __sched void wait_on_page_locked(struct page *page)
 {
 	if (PageLocked(page))
 		wait_on_page_bit(compound_head(page), PG_locked);
 }
 
-static inline int wait_on_page_locked_killable(struct page *page)
+static inline __sched int wait_on_page_locked_killable(struct page *page)
 {
 	if (!PageLocked(page))
 		return 0;

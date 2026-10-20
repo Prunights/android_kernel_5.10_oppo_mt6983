@@ -42,6 +42,9 @@
 
 #include "internal.h"
 
+#undef CREATE_TRACE_POINT
+#include <trace/hooks/mm.h>
+
 /*
  * Sleep at most 200ms at a time in balance_dirty_pages().
  */
@@ -1647,6 +1650,9 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 			}
 		}
 
+		trace_android_vh_mm_dirty_limits(gdtc, strictlimit, dirty, bg_thresh,
+				nr_reclaimable, pages_dirtied);
+
 		/*
 		 * Throttle it only when the background writeback cannot
 		 * catch-up. This avoids (excessively) small writeouts
@@ -2749,7 +2755,12 @@ int test_clear_page_writeback(struct page *page)
 	int ret;
 
 	memcg = lock_page_memcg(page);
-	lruvec = mem_cgroup_page_lruvec(page, page_pgdat(page));
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_CONT_PTE_HUGEPAGE_LRU
+	if (ContPteCMAHugePageHead(page))
+		lruvec = mem_cgroup_chp_page_lruvec(page, page_pgdat(page));
+	else
+#endif
+		lruvec = mem_cgroup_page_lruvec(page, page_pgdat(page));
 	if (mapping && mapping_use_writeback_tags(mapping)) {
 		struct inode *inode = mapping->host;
 		struct backing_dev_info *bdi = inode_to_bdi(inode);

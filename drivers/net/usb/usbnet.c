@@ -587,6 +587,11 @@ static void rx_complete (struct urb *urb)
 	int			urb_status = urb->status;
 	enum skb_state		state;
 
+	if (urb->actual_length > urb->transfer_buffer_length) {
+		urb->actual_length = 0;
+		urb_status = -EOVERFLOW;
+	}
+
 	skb_put (skb, urb->actual_length);
 	state = rx_done;
 	entry->urb = NULL;

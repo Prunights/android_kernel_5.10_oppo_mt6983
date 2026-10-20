@@ -18,6 +18,10 @@
 
 #include <trace/events/f2fs.h>
 
+#ifdef CONFIG_F2FS_FS_COMPRESSION
+extern const struct address_space_operations f2fs_compress_aops;
+#endif
+
 void f2fs_mark_inode_dirty_sync(struct inode *inode, bool sync)
 {
 	if (is_inode_flag_set(inode, FI_NEW_INODE))
@@ -199,6 +203,27 @@ void f2fs_inode_chksum_set(struct f2fs_sb_info *sbi, struct page *page)
 	ri->i_inode_checksum = cpu_to_le32(f2fs_inode_chksum(sbi, page));
 }
 
+int f2fs_inode_chksum_get(struct f2fs_sb_info *sbi,
+			  struct inode *inode, u32 *chksum)
+{
+	struct page *ipage;
+	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct f2fs_inode *ri;
+
+	if (!f2fs_sb_has_inode_chksum(sbi) ||
+	    !f2fs_has_extra_attr(inode) ||
+	    !F2FS_FITS_IN_INODE(ri, fi->i_extra_isize, i_inode_checksum))
+		return -EOPNOTSUPP;
+
+	ipage = f2fs_get_node_page(sbi, inode->i_ino);
+	if (IS_ERR(ipage))
+		return PTR_ERR(ipage);
+
+	*chksum = f2fs_inode_chksum(sbi, ipage);
+	f2fs_put_page(ipage, true);
+	return 0;
+}
+
 static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -259,8 +284,8 @@ static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 		return false;
 	}
 
-	if (F2FS_I(inode)->extent_tree) {
-		struct extent_info *ei = &F2FS_I(inode)->extent_tree->largest;
+	if (fi->extent_tree[EX_READ]) {
+		struct extent_info *ei = &fi->extent_tree[EX_READ]->largest;
 
 		if (ei->len &&
 			(!f2fs_is_valid_blkaddr(sbi, ei->blk,
@@ -338,6 +363,46 @@ static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 	return true;
 }
 
+#ifdef CONFIG_F2FS_FS_DEDUP
+/* should init dedup flags before */
+static int init_inner_inode(struct inode *inode)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct f2fs_inode_info *fi = F2FS_I(inode);
+	struct page *node_page = NULL;
+	struct f2fs_inode *ri = NULL;
+	struct inode *inner = NULL;
+	nid_t inner_ino;
+
+	if (!f2fs_is_outer_inode(inode))
+		return 0;
+
+	if (time_to_inject(sbi, FAULT_DEDUP_INIT_INNER)) {
+		f2fs_show_injection_info(sbi, FAULT_DEDUP_INIT_INNER);
+		return -EIO;
+	}
+
+	node_page = f2fs_get_node_page(sbi, inode->i_ino);
+	if (IS_ERR(node_page))
+		return PTR_ERR(node_page);
+
+	ri = F2FS_INODE(node_page);
+	inner_ino = le32_to_cpu(ri->i_inner_ino);
+
+	inner = f2fs_iget(sbi->sb, inner_ino);
+	if (unlikely(IS_ERR(inner))) {
+		f2fs_err(sbi, "inode[%lu] iget inner ino[%u] fail",
+				inode->i_ino, inner_ino);
+		f2fs_put_page(node_page, 1);
+		return PTR_ERR(inner);
+	}
+
+	fi->inner_inode = inner;
+	f2fs_put_page(node_page, 1);
+	return 0;
+}
+#endif
+
 static int do_read_inode(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -385,8 +450,6 @@ static int do_read_inode(struct inode *inode)
 	fi->i_pino = le32_to_cpu(ri->i_pino);
 	fi->i_dir_level = ri->i_dir_level;
 
-	f2fs_init_extent_tree(inode, node_page);
-
 	get_inline_info(inode, ri);
 
 	fi->i_extra_isize = f2fs_has_extra_attr(inode) ?
@@ -406,11 +469,6 @@ static int do_read_inode(struct inode *inode)
 		 * we get the space back only from inline_data.
 		 */
 		fi->i_inline_xattr_size = 0;
-	}
-
-	if (!sanity_check_inode(inode, node_page)) {
-		f2fs_put_page(node_page, 1);
-		return -EFSCORRUPTED;
 	}
 
 	/* check data exist */
@@ -470,10 +528,26 @@ static int do_read_inode(struct inode *inode)
 		}
 	}
 
+#ifdef CONFIG_F2FS_FS_DEDUP
+	if (f2fs_inode_support_dedup(sbi, inode))
+		get_dedup_flags_info(inode, ri);
+#endif
 	F2FS_I(inode)->i_disk_time[0] = inode->i_atime;
 	F2FS_I(inode)->i_disk_time[1] = inode->i_ctime;
 	F2FS_I(inode)->i_disk_time[2] = inode->i_mtime;
 	F2FS_I(inode)->i_disk_time[3] = F2FS_I(inode)->i_crtime;
+
+	/* Need all the flag bits */
+	f2fs_init_read_extent_tree(inode, node_page);
+	f2fs_init_age_extent_tree(inode);
+	if (!sanity_check_inode(inode, node_page)) {
+		f2fs_put_page(node_page, 1);
+		return -EFSCORRUPTED;
+	}
+
+#ifdef CONFIG_F2FS_APPBOOST
+	atomic_set(&F2FS_I(inode)->appboost_abort, 0);
+#endif
 	f2fs_put_page(node_page, 1);
 
 	stat_inc_inline_xattr(inode);
@@ -502,6 +576,11 @@ struct inode *f2fs_iget(struct super_block *sb, unsigned long ino)
 	if (ino == F2FS_NODE_INO(sbi) || ino == F2FS_META_INO(sbi))
 		goto make_now;
 
+#ifdef CONFIG_F2FS_FS_COMPRESSION
+	if (ino == F2FS_COMPRESS_INO(sbi))
+		goto make_now;
+#endif
+
 	ret = do_read_inode(inode);
 	if (ret)
 		goto bad_inode;
@@ -512,6 +591,12 @@ make_now:
 	} else if (ino == F2FS_META_INO(sbi)) {
 		inode->i_mapping->a_ops = &f2fs_meta_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);
+	} else if (ino == F2FS_COMPRESS_INO(sbi)) {
+#ifdef CONFIG_F2FS_FS_COMPRESSION
+		inode->i_mapping->a_ops = &f2fs_compress_aops;
+#endif
+		mapping_set_gfp_mask(inode->i_mapping,
+			GFP_NOFS | __GFP_HIGHMEM | __GFP_MOVABLE);
 	} else if (S_ISREG(inode->i_mode)) {
 		inode->i_op = &f2fs_file_inode_operations;
 		inode->i_fop = &f2fs_file_operations;
@@ -536,6 +621,11 @@ make_now:
 		ret = -EIO;
 		goto bad_inode;
 	}
+#ifdef CONFIG_F2FS_FS_DEDUP
+	ret = init_inner_inode(inode);
+	if (ret)
+		goto bad_inode;
+#endif
 	f2fs_set_inode_flags(inode);
 	unlock_new_inode(inode);
 	trace_f2fs_iget(inode);
@@ -565,7 +655,10 @@ retry:
 void f2fs_update_inode(struct inode *inode, struct page *node_page)
 {
 	struct f2fs_inode *ri;
-	struct extent_tree *et = F2FS_I(inode)->extent_tree;
+	struct extent_tree *et = F2FS_I(inode)->extent_tree[EX_READ];
+#ifdef CONFIG_F2FS_FS_DEDUP
+	struct inode *inner;
+#endif
 
 	f2fs_wait_on_page_writeback(node_page, NODE, true, true);
 	set_page_dirty(node_page);
@@ -584,7 +677,7 @@ void f2fs_update_inode(struct inode *inode, struct page *node_page)
 
 	if (et) {
 		read_lock(&et->lock);
-		set_raw_extent(&et->largest, &ri->i_ext);
+		set_raw_read_extent(&et->largest, &ri->i_ext);
 		read_unlock(&et->lock);
 	} else {
 		memset(&ri->i_ext, 0, sizeof(ri->i_ext));
@@ -648,13 +741,26 @@ void f2fs_update_inode(struct inode *inode, struct page *node_page)
 			ri->i_log_cluster_size =
 				F2FS_I(inode)->i_log_cluster_size;
 		}
+#ifdef CONFIG_F2FS_FS_DEDUP
+		if (f2fs_sb_has_dedup(F2FS_I_SB(inode)) &&
+			F2FS_FITS_IN_INODE(ri, F2FS_I(inode)->i_extra_isize,
+				i_dedup_flags)) {
+			set_raw_dedup_flags(inode, ri);
+
+			inner = F2FS_I(inode)->inner_inode;
+			if (inner)
+				ri->i_inner_ino = cpu_to_le32(inner->i_ino);
+			else
+				ri->i_inner_ino = 0;
+		}
+#endif
 	}
 
 	__set_inode_rdev(inode, ri);
 
 	/* deleted inode */
 	if (inode->i_nlink == 0)
-		clear_inline_node(node_page);
+		clear_page_private_inline(node_page);
 
 	F2FS_I(inode)->i_disk_time[0] = inode->i_atime;
 	F2FS_I(inode)->i_disk_time[1] = inode->i_ctime;
@@ -674,11 +780,13 @@ retry:
 	node_page = f2fs_get_node_page(sbi, inode->i_ino);
 	if (IS_ERR(node_page)) {
 		int err = PTR_ERR(node_page);
+
 		if (err == -ENOMEM) {
 			cond_resched();
 			goto retry;
 		} else if (err != -ENOENT) {
-			f2fs_stop_checkpoint(sbi, false);
+			f2fs_stop_checkpoint(sbi, false,
+					STOP_CP_REASON_UPDATE_INODE);
 		}
 		return;
 	}
@@ -708,13 +816,42 @@ int f2fs_write_inode(struct inode *inode, struct writeback_control *wbc)
 
 	/*
 	 * We need to balance fs here to prevent from producing dirty node pages
-	 * during the urgent cleaning time when runing out of free sections.
+	 * during the urgent cleaning time when running out of free sections.
 	 */
 	f2fs_update_inode_page(inode);
 	if (wbc && wbc->nr_to_write)
 		f2fs_balance_fs(sbi, true);
 	return 0;
 }
+
+#ifdef CONFIG_F2FS_FS_DEDUP
+static void f2fs_dec_inner_link(struct inode *inode)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct inode *inner = NULL;
+	int err = 0;
+
+	inner = get_inner_inode(inode);
+	if (!inner)
+		return;
+
+	if (time_to_inject(sbi, FAULT_DEDUP_ORPHAN_INODE)) {
+		f2fs_show_injection_info(sbi, FAULT_DEDUP_ORPHAN_INODE);
+		err = -ENOSPC;
+	} else {
+		err = f2fs_acquire_orphan_inode(sbi);
+	}
+	if (err) {
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+		put_inner_inode(inner);
+		return;
+	}
+	f2fs_drop_deduped_link(inner);
+
+	trace_f2fs_dedup_dec_inner_link(inode, inner);
+	put_inner_inode(inner);
+}
+#endif
 
 /*
  * Called at the last iput() if i_nlink is zero
@@ -732,8 +869,12 @@ void f2fs_evict_inode(struct inode *inode)
 	trace_f2fs_evict_inode(inode);
 	truncate_inode_pages_final(&inode->i_data);
 
+	if (test_opt(sbi, COMPRESS_CACHE) && f2fs_compressed_file(inode))
+		f2fs_invalidate_compress_pages(sbi, inode->i_ino);
+
 	if (inode->i_ino == F2FS_NODE_INO(sbi) ||
-			inode->i_ino == F2FS_META_INO(sbi))
+			inode->i_ino == F2FS_META_INO(sbi) ||
+			inode->i_ino == F2FS_COMPRESS_INO(sbi))
 		goto out_clear;
 
 	f2fs_bug_on(sbi, get_dirty_pages(inode));
@@ -754,7 +895,8 @@ void f2fs_evict_inode(struct inode *inode)
 	f2fs_remove_ino_entry(sbi, inode->i_ino, UPDATE_INO);
 	f2fs_remove_ino_entry(sbi, inode->i_ino, FLUSH_INO);
 
-	sb_start_intwrite(inode->i_sb);
+	if (!is_sbi_flag_set(sbi, SBI_IS_FREEZING))
+		sb_start_intwrite(inode->i_sb);
 	set_inode_flag(inode, FI_NO_ALLOC);
 	i_size_write(inode, 0);
 retry:
@@ -770,6 +912,10 @@ retry:
 		f2fs_lock_op(sbi);
 		err = f2fs_remove_inode_page(inode);
 		f2fs_unlock_op(sbi);
+#ifdef CONFIG_F2FS_FS_DEDUP
+		if (f2fs_is_outer_inode(inode))
+			f2fs_dec_inner_link(inode);
+#endif
 		if (err == -ENOENT) {
 			err = 0;
 
@@ -799,8 +945,13 @@ retry:
 		if (dquot_initialize_needed(inode))
 			set_sbi_flag(sbi, SBI_QUOTA_NEED_REPAIR);
 	}
-	sb_end_intwrite(inode->i_sb);
+	if (!is_sbi_flag_set(sbi, SBI_IS_FREEZING))
+		sb_end_intwrite(inode->i_sb);
 no_delete:
+#ifdef CONFIG_F2FS_FS_DEDUP
+	if (F2FS_I(inode)->inner_inode)
+		iput(F2FS_I(inode)->inner_inode);
+#endif
 	dquot_drop(inode);
 
 	stat_dec_inline_xattr(inode);
@@ -872,7 +1023,7 @@ void f2fs_handle_failed_inode(struct inode *inode)
 	 * so we can prevent losing this orphan when encoutering checkpoint
 	 * and following suddenly power-off.
 	 */
-	err = f2fs_get_node_info(sbi, inode->i_ino, &ni);
+	err = f2fs_get_node_info(sbi, inode->i_ino, &ni, false);
 	if (err) {
 		set_sbi_flag(sbi, SBI_NEED_FSCK);
 		set_inode_flag(inode, FI_FREE_NID);

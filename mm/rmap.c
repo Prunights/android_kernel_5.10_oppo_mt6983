@@ -77,6 +77,8 @@
 
 #include <trace/events/tlb.h>
 
+#include <trace/hooks/mm.h>
+
 #include "internal.h"
 
 static struct kmem_cache *anon_vma_cachep;
@@ -297,11 +299,11 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 		 * anon_vma child.
 		 *
 		 * Root anon_vma is never reused:
+		 *
 		 * it has self-parent reference and at least one child.
 		 */
 		if (!dst->anon_vma && src->anon_vma &&
-		    anon_vma->num_children < 2 &&
-		    anon_vma->num_active_vmas == 0)
+		    anon_vma->num_children < 2 &&anon_vma->num_active_vmas == 0)
 			dst->anon_vma = anon_vma;
 	}
 	if (dst->anon_vma)
@@ -519,13 +521,16 @@ out:
  *
  * Its a little more complex as it tries to keep the fast path to a single
  * atomic op -- the trylock. If we fail the trylock, we fall back to getting a
- * reference like with page_get_anon_vma() and then block on the mutex.
+ * reference like with page_get_anon_vma() and then block on the mutex
+ * on !rwc->try_lock case.
  */
-struct anon_vma *page_lock_anon_vma_read(struct page *page)
+struct anon_vma *page_lock_anon_vma_read(struct page *page,
+					 struct rmap_walk_control *rwc)
 {
 	struct anon_vma *anon_vma = NULL;
 	struct anon_vma *root_anon_vma;
 	unsigned long anon_mapping;
+	bool success = false;
 
 	rcu_read_lock();
 	anon_mapping = (unsigned long)READ_ONCE(page->mapping);
@@ -546,6 +551,17 @@ struct anon_vma *page_lock_anon_vma_read(struct page *page)
 			up_read(&root_anon_vma->rwsem);
 			anon_vma = NULL;
 		}
+		goto out;
+	}
+	trace_android_vh_do_page_trylock(page, NULL, NULL, &success);
+	if (success) {
+		anon_vma = NULL;
+		goto out;
+	}
+
+	if (rwc && rwc->try_lock) {
+		anon_vma = NULL;
+		rwc->contended = true;
 		goto out;
 	}
 
@@ -785,6 +801,31 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		if (pvmw.pte) {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (ContPteHugePageHead(pvmw.page) &&
+			    pte_cont(READ_ONCE(*pvmw.pte))) {
+				/*
+				 * just like try_to_unmap_one, cont_pte might be formed during pte walk
+				 */
+				if (!IS_ALIGNED((unsigned long)pvmw.pte, sizeof(*pvmw.pte) * CONT_PTES)) {
+					/* don't struggle with the reclamation of a new formed cont_pte */
+					referenced++;
+					goto new_formed_cont_pte;
+				}
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+				{volatile bool __maybe_unused x = cont_pte_trans_huge(pvmw.pte, CORRUPT_CONT_PTE_REASON_PAGE_REFS_ONE);}
+#endif
+				if (cont_ptep_clear_flush_young_notify(vma, address,
+								       pvmw.pte)) {
+					if (likely(!(vma->vm_flags & VM_SEQ_READ)))
+						referenced++;
+				}
+new_formed_cont_pte:
+				pra->mapcount--;
+				continue;
+			}
+#endif
+			trace_android_vh_look_around(&pvmw, page, vma, &referenced);
 			if (ptep_clear_flush_young_notify(vma, address,
 						pvmw.pte)) {
 				/*
@@ -820,6 +861,7 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 		pra->vm_flags |= vma->vm_flags;
 	}
 
+	trace_android_vh_page_referenced_one_end(vma, page, referenced);
 	if (!pra->mapcount)
 		return false; /* To break the loop */
 
@@ -844,8 +886,10 @@ static bool invalid_page_referenced_vma(struct vm_area_struct *vma, void *arg)
  * @memcg: target memory cgroup
  * @vm_flags: collect encountered vma->vm_flags who actually referenced the page
  *
- * Quick test_and_clear_referenced for all mappings to a page,
- * returns the number of ptes which referenced the page.
+ * Quick test_and_clear_referenced for all mappings of a page,
+ *
+ * Return: The number of mappings which referenced the page. Return -1 if
+ * the function bailed out due to rmap lock contention.
  */
 int page_referenced(struct page *page,
 		    int is_locked,
@@ -861,6 +905,7 @@ int page_referenced(struct page *page,
 		.rmap_one = page_referenced_one,
 		.arg = (void *)&pra,
 		.anon_lock = page_lock_anon_vma_read,
+		.try_lock = true,
 	};
 
 	*vm_flags = 0;
@@ -891,8 +936,9 @@ int page_referenced(struct page *page,
 	if (we_locked)
 		unlock_page(page);
 
-	return pra.referenced;
+	return rwc.contended ? -1 : pra.referenced;
 }
+EXPORT_SYMBOL_GPL(page_referenced);
 
 static bool page_mkclean_one(struct page *page, struct vm_area_struct *vma,
 			    unsigned long address, void *arg)
@@ -1033,7 +1079,7 @@ void page_move_anon_rmap(struct page *page, struct vm_area_struct *vma)
  * __page_set_anon_rmap - set up new anonymous rmap
  * @page:	Page or Hugepage to add to rmap
  * @vma:	VM area to add page to.
- * @address:	User virtual address of the mapping	
+ * @address:	User virtual address of the mapping
  * @exclusive:	the page is exclusively owned by the current process
  */
 static void __page_set_anon_rmap(struct page *page,
@@ -1113,6 +1159,7 @@ void do_page_add_anon_rmap(struct page *page,
 {
 	bool compound = flags & RMAP_COMPOUND;
 	bool first;
+	bool success = false;
 
 	if (unlikely(PageKsm(page)))
 		lock_page_memcg(page);
@@ -1126,7 +1173,10 @@ void do_page_add_anon_rmap(struct page *page,
 		mapcount = compound_mapcount_ptr(page);
 		first = atomic_inc_and_test(mapcount);
 	} else {
-		first = atomic_inc_and_test(&page->_mapcount);
+		trace_android_vh_update_page_mapcount(page, true, compound,
+							&first, &success);
+		if (!success)
+			first = atomic_inc_and_test(&page->_mapcount);
 	}
 
 	if (first) {
@@ -1156,7 +1206,7 @@ void do_page_add_anon_rmap(struct page *page,
 }
 
 /**
- * page_add_new_anon_rmap - add pte mapping to a new anonymous page
+ * __page_add_new_anon_rmap - add pte mapping to a new anonymous page
  * @page:	the page to add the mapping to
  * @vma:	the vm area in which the mapping is added
  * @address:	the user virtual address mapped
@@ -1166,12 +1216,11 @@ void do_page_add_anon_rmap(struct page *page,
  * This means the inc-and-test can be bypassed.
  * Page does not have to be locked.
  */
-void page_add_new_anon_rmap(struct page *page,
+void __page_add_new_anon_rmap(struct page *page,
 	struct vm_area_struct *vma, unsigned long address, bool compound)
 {
 	int nr = compound ? thp_nr_pages(page) : 1;
 
-	VM_BUG_ON_VMA(address < vma->vm_start || address >= vma->vm_end, vma);
 	__SetPageSwapBacked(page);
 	if (compound) {
 		VM_BUG_ON_PAGE(!PageTransHuge(page), page);
@@ -1201,13 +1250,22 @@ void page_add_new_anon_rmap(struct page *page,
 void page_add_file_rmap(struct page *page, bool compound)
 {
 	int i, nr = 1;
+	bool first_mapping;
+	bool success = false;
 
 	VM_BUG_ON_PAGE(compound && !PageTransHuge(page), page);
 	lock_page_memcg(page);
 	if (compound && PageTransHuge(page)) {
 		for (i = 0, nr = 0; i < thp_nr_pages(page); i++) {
-			if (atomic_inc_and_test(&page[i]._mapcount))
-				nr++;
+			trace_android_vh_update_page_mapcount(&page[i], true,
+					compound, &first_mapping, &success);
+			if ((success)) {
+				if (first_mapping)
+					nr++;
+			} else {
+				if (atomic_inc_and_test(&page[i]._mapcount))
+					nr++;
+			}
 		}
 		if (!atomic_inc_and_test(compound_mapcount_ptr(page)))
 			goto out;
@@ -1219,12 +1277,25 @@ void page_add_file_rmap(struct page *page, bool compound)
 		if (PageTransCompound(page) && page_mapping(page)) {
 			VM_WARN_ON_ONCE(!PageLocked(page));
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (!TestSetPageDoubleMap(compound_head(page)))
+				atomic_long_inc(&cont_pte_double_map_count);
+#else
 			SetPageDoubleMap(compound_head(page));
+#endif
+
 			if (PageMlocked(page))
 				clear_page_mlock(compound_head(page));
 		}
-		if (!atomic_inc_and_test(&page->_mapcount))
-			goto out;
+		trace_android_vh_update_page_mapcount(page, true,
+					compound, &first_mapping, &success);
+		if (success) {
+			if (!first_mapping)
+				goto out;
+		} else {
+			if (!atomic_inc_and_test(&page->_mapcount))
+				goto out;
+		}
 	}
 	__mod_lruvec_page_state(page, NR_FILE_MAPPED, nr);
 out:
@@ -1234,6 +1305,8 @@ out:
 static void page_remove_file_rmap(struct page *page, bool compound)
 {
 	int i, nr = 1;
+	bool first_mapping;
+	bool success = false;
 
 	VM_BUG_ON_PAGE(compound && !PageHead(page), page);
 
@@ -1247,8 +1320,15 @@ static void page_remove_file_rmap(struct page *page, bool compound)
 	/* page still mapped by someone else? */
 	if (compound && PageTransHuge(page)) {
 		for (i = 0, nr = 0; i < thp_nr_pages(page); i++) {
-			if (atomic_add_negative(-1, &page[i]._mapcount))
-				nr++;
+			trace_android_vh_update_page_mapcount(&page[i], false,
+						compound, &first_mapping, &success);
+			if (success) {
+				if (first_mapping)
+					nr++;
+			} else {
+				if (atomic_add_negative(-1, &page[i]._mapcount))
+					nr++;
+			}
 		}
 		if (!atomic_add_negative(-1, compound_mapcount_ptr(page)))
 			return;
@@ -1257,8 +1337,15 @@ static void page_remove_file_rmap(struct page *page, bool compound)
 		else
 			__dec_node_page_state(page, NR_FILE_PMDMAPPED);
 	} else {
-		if (!atomic_add_negative(-1, &page->_mapcount))
-			return;
+		trace_android_vh_update_page_mapcount(page, false,
+					compound, &first_mapping, &success);
+		if (success) {
+			if (!first_mapping)
+				return;
+		} else {
+			if (!atomic_add_negative(-1, &page->_mapcount))
+				return;
+		}
 	}
 
 	/*
@@ -1275,6 +1362,8 @@ static void page_remove_file_rmap(struct page *page, bool compound)
 static void page_remove_anon_compound_rmap(struct page *page)
 {
 	int i, nr;
+	bool first_mapping;
+	bool success = false;
 
 	if (!atomic_add_negative(-1, compound_mapcount_ptr(page)))
 		return;
@@ -1294,10 +1383,17 @@ static void page_remove_anon_compound_rmap(struct page *page)
 		 * them are still mapped.
 		 */
 		for (i = 0, nr = 0; i < thp_nr_pages(page); i++) {
-			if (atomic_add_negative(-1, &page[i]._mapcount))
-				nr++;
+			trace_android_vh_update_page_mapcount(&page[i], false,
+					false, &first_mapping, &success);
+			if (success) {
+				if (first_mapping)
+					nr++;
+			} else {
+				if (atomic_add_negative(-1, &page[i]._mapcount))
+					nr++;
+			}
 		}
-
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 		/*
 		 * Queue the page for deferred split if at least one small
 		 * page of the compound page is unmapped, but at least one
@@ -1305,6 +1401,9 @@ static void page_remove_anon_compound_rmap(struct page *page)
 		 */
 		if (nr && nr < thp_nr_pages(page))
 			deferred_split_huge_page(page);
+#else
+		atomic_long_dec(&cont_pte_double_map_count);
+#endif
 	} else {
 		nr = thp_nr_pages(page);
 	}
@@ -1325,6 +1424,8 @@ static void page_remove_anon_compound_rmap(struct page *page)
  */
 void page_remove_rmap(struct page *page, bool compound)
 {
+	bool first_mapping;
+	bool success = false;
 	lock_page_memcg(page);
 
 	if (!PageAnon(page)) {
@@ -1337,10 +1438,16 @@ void page_remove_rmap(struct page *page, bool compound)
 		goto out;
 	}
 
-	/* page still mapped by someone else? */
-	if (!atomic_add_negative(-1, &page->_mapcount))
-		goto out;
-
+	trace_android_vh_update_page_mapcount(page, false,
+					compound, &first_mapping, &success);
+	if (success) {
+		if (!first_mapping)
+			goto out;
+	} else {
+		/* page still mapped by someone else? */
+		if (!atomic_add_negative(-1, &page->_mapcount))
+			goto out;
+	}
 	/*
 	 * We use the irq-unsafe __{inc|mod}_zone_page_stat because
 	 * these counters are not modified in interrupt context, and
@@ -1351,8 +1458,10 @@ void page_remove_rmap(struct page *page, bool compound)
 	if (unlikely(PageMlocked(page)))
 		clear_page_mlock(page);
 
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 	if (PageTransCompound(page))
 		deferred_split_huge_page(compound_head(page));
+#endif
 
 	/*
 	 * It would be tidy to reset the PageAnon mapping here,
@@ -1384,6 +1493,12 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	bool ret = true;
 	struct mmu_notifier_range range;
 	enum ttu_flags flags = (enum ttu_flags)(long)arg;
+#if defined(CONFIG_CONT_PTE_HUGEPAGE) && CONFIG_MAPPED_WALK_MIDDLE_CONT_PTE_DEBUG
+	unsigned long ori_addr = address;
+#endif
+#if defined(CONFIG_CONT_PTE_HUGEPAGE)
+	bool first_entry = false;
+#endif
 
 	/*
 	 * When racing against e.g. zap_pte_range() on another cpu,
@@ -1403,8 +1518,16 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		return true;
 
 	if (flags & TTU_SPLIT_HUGE_PMD) {
-		split_huge_pmd_address(vma, address,
-				flags & TTU_SPLIT_FREEZE, page);
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (ContPteHugePageHead(page)) {
+			if (flags & TTU_IGNORE_MLOCK || !(vma->vm_flags & VM_LOCKED))
+				split_huge_cont_pte_address(vma, address, flags & TTU_SPLIT_FREEZE, page);
+		} else {
+			split_huge_pmd_address(vma, address, flags & TTU_SPLIT_FREEZE, page);
+		}
+#else
+		split_huge_pmd_address(vma, address, flags & TTU_SPLIT_FREEZE, page);
+#endif
 	}
 
 	/*
@@ -1448,7 +1571,13 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		if (!(flags & TTU_IGNORE_MLOCK)) {
 			if (vma->vm_flags & VM_LOCKED) {
 				/* PTE-mapped THP are never mlocked */
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 				if (!PageTransCompound(page)) {
+#else
+				if (!PageTransCompound(page) ||
+				     (ContPteHugePage(page) &&
+				      !PageDoubleMap(page))) {
+#endif
 					/*
 					 * Holding pte lock, we do *not* need
 					 * mmap_lock here
@@ -1462,6 +1591,41 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			if (flags & TTU_MUNLOCK)
 				continue;
 		}
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			/*
+			 * NOTE: After we do the split, if pte is still pte_cont, and there is
+			 * a low probability that pte_cont is set in the middle, then we break
+			 * page_vma_mapped_walk, so that the page is reclaimed again later.
+			 */
+			if (/*flags & TTU_SPLIT_HUGE_PMD && */pvmw.pte && pte_cont(READ_ONCE(*pvmw.pte))) {
+#if CONFIG_MAPPED_WALK_MIDDLE_CONT_PTE_DEBUG
+				u64 seq;
+				int i;
+				unsigned long haddr = ori_addr & HPAGE_CONT_PTE_MASK;
+				pte_t *hpte = pvmw.pte - (pvmw.address - haddr) / PAGE_SIZE;
+
+				atomic64_inc(&perf_stat.mapped_walk_middle_cont_pte_cnt);
+				seq = atomic64_read(&perf_stat.mapped_walk_middle_cont_pte_cnt);
+				perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].ori_addr = ori_addr;
+				perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].addr = pvmw.address;
+				perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].page = page;
+				perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].page_pfn = page_to_pfn(page);
+				perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].pte_pfn = pte_pfn(READ_ONCE(*pvmw.pte));
+				for (i = 0; i < HPAGE_CONT_PTE_NR; i++) {
+					perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].pte[i] =
+						(hpte + i) ? pte_val(READ_ONCE(*(hpte + i))) : 0;
+					if (!(flags & TTU_SPLIT_HUGE_PMD)) {
+						pr_err("@@@@FIXME:%s flags & TTU_SPLIT_HUGE_PMD false\n", __func__);
+						perf_stat.mapped_walk_stat[seq % MAPPED_WALK_HIT_SEQ].pte[i] |= 1UL << 63;
+					}
+				}
+#endif
+				ret = false;
+				page_vma_mapped_walk_done(&pvmw);
+				break;
+			}
+#endif
 
 		/* Unexpected PMD-mapped THP? */
 		VM_BUG_ON_PAGE(!pvmw.pte, page);
@@ -1627,6 +1791,41 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		} else if (PageAnon(page)) {
 			swp_entry_t entry = { .val = page_private(subpage) };
 			pte_t swp_pte;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (!first_entry) {
+				first_entry = true;
+				if (ContPteHugePageHead(page)) {
+					int i;
+					unsigned long nr;
+
+					/* we are not starting from head */
+					if (!IS_ALIGNED((unsigned long)pvmw.pte, CONT_PTES * sizeof(*pvmw.pte))) {
+						ret = false;
+						atomic64_inc(&perf_stat.mapped_walk_start_from_non_head);
+						set_pte_at(mm, address, pvmw.pte, pteval);
+						page_vma_mapped_walk_done(&pvmw);
+						break;
+					}
+
+					nr = atomic_read(&page[0]._mapcount);
+					/* double map happened at the last moment */
+					for (i = 1; i < HPAGE_CONT_PTE_NR; i++) {
+						if (atomic_read(&page[i]._mapcount) != nr) {
+							ret = false;
+							atomic64_inc(&perf_stat.mapped_walk_lastmoment_doublemap);
+							set_pte_at(mm, address, pvmw.pte, pteval);
+							page_vma_mapped_walk_done(&pvmw);
+							break;
+						}
+					}
+					if (i <  HPAGE_CONT_PTE_NR)
+						break;
+				}
+			}
+			if (ContPteHugePageHead(subpage))
+				CHP_BUG_ON(!IS_ALIGNED(swp_offset(entry), HPAGE_CONT_PTE_NR));
+#endif
 			/*
 			 * Store the swap location in the pte.
 			 * See handle_pte_fault() ...
@@ -1685,6 +1884,16 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 				break;
 			}
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+			if (ContPteHugePage(subpage)) {
+				if ((swp_offset(entry) % HPAGE_CONT_PTE_NR) != ((unsigned long)pvmw.pte & (sizeof(pte_t) * CONT_PTES - 1)) / sizeof(pte_t)) {
+					pr_err("@@@FIXME:%s-%d not-aligned-swap-offset:%lx val:%lx addr:%lx\n",
+						__func__, __LINE__, swp_offset(entry), entry.val, pvmw.address);
+					UNALIGNED_CONT_PTE_WARN(1);
+				}
+			}
+#endif
+
 			if (swap_duplicate(entry) < 0) {
 				set_pte_at(mm, address, pvmw.pte, pteval);
 				ret = false;
@@ -1740,6 +1949,7 @@ discard:
 	}
 
 	mmu_notifier_invalidate_range_end(&range);
+	trace_android_vh_try_to_unmap_one(vma, page, address, ret);
 
 	return ret;
 }
@@ -1790,6 +2000,17 @@ bool try_to_unmap(struct page *page, enum ttu_flags flags)
 	else
 		rmap_walk(page, &rwc);
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	/* page_mapcount is not reliable for cont_pte pages */
+	if (ContPteHugePageHead(page) && PageAnon(page)) {
+		if (ContPteHugePageDoubleMap(page) ||
+			atomic_read(compound_mapcount_ptr(page)) >= 0)
+			return false;
+		else
+			return true;
+	}
+#endif
+
 	/*
 	 * When racing against e.g. zap_pte_range() on another cpu,
 	 * in between its ptep_get_and_clear_full() and page_remove_rmap(),
@@ -1839,7 +2060,7 @@ static struct anon_vma *rmap_walk_anon_lock(struct page *page,
 	struct anon_vma *anon_vma;
 
 	if (rwc->anon_lock)
-		return rwc->anon_lock(page);
+		return rwc->anon_lock(page, rwc);
 
 	/*
 	 * Note: remove_migration_ptes() cannot use page_lock_anon_vma_read()
@@ -1851,7 +2072,17 @@ static struct anon_vma *rmap_walk_anon_lock(struct page *page,
 	if (!anon_vma)
 		return NULL;
 
+	if (anon_vma_trylock_read(anon_vma))
+		goto out;
+
+	if (rwc->try_lock) {
+		anon_vma = NULL;
+		rwc->contended = true;
+		goto out;
+	}
+
 	anon_vma_lock_read(anon_vma);
+out:
 	return anon_vma;
 }
 
@@ -1928,6 +2159,7 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 	struct address_space *mapping = page_mapping(page);
 	pgoff_t pgoff_start, pgoff_end;
 	struct vm_area_struct *vma;
+	bool got_lock = false, success = false;
 
 	/*
 	 * The page lock not only makes sure that page->mapping cannot
@@ -1942,8 +2174,25 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 
 	pgoff_start = page_to_pgoff(page);
 	pgoff_end = pgoff_start + thp_nr_pages(page) - 1;
-	if (!locked)
-		i_mmap_lock_read(mapping);
+	if (!locked) {
+		trace_android_vh_do_page_trylock(page,
+					&mapping->i_mmap_rwsem, &got_lock, &success);
+		if (success) {
+			if (!got_lock)
+				return;
+		} else {
+			if (i_mmap_trylock_read(mapping))
+				goto lookup;
+
+			if (rwc->try_lock) {
+				rwc->contended = true;
+				return;
+			}
+
+			i_mmap_lock_read(mapping);
+		}
+	}
+lookup:
 	vma_interval_tree_foreach(vma, &mapping->i_mmap,
 			pgoff_start, pgoff_end) {
 		unsigned long address = vma_address(page, vma);

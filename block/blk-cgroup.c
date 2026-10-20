@@ -31,6 +31,7 @@
 #include <linux/tracehook.h>
 #include <linux/psi.h>
 #include "blk.h"
+#include "blk-ioprio.h"
 
 #define MAX_KEY_LEN 100
 
@@ -1182,6 +1183,10 @@ int blkcg_init_queue(struct request_queue *q)
 	if (preloaded)
 		radix_tree_preload_end();
 
+	ret = blk_ioprio_init(q);
+	if (ret)
+		goto err_destroy_all;
+
 	ret = blk_throtl_init(q);
 	if (ret)
 		goto err_destroy_all;
@@ -1191,6 +1196,7 @@ int blkcg_init_queue(struct request_queue *q)
 		blk_throtl_exit(q);
 		goto err_destroy_all;
 	}
+
 	return 0;
 
 err_destroy_all:
@@ -1789,6 +1795,7 @@ void blkcg_schedule_throttle(struct request_queue *q, bool use_memdelay)
 		current->use_memdelay = use_memdelay;
 	set_notify_resume(current);
 }
+EXPORT_SYMBOL_GPL(blkcg_schedule_throttle);
 
 /**
  * blkcg_add_delay - add delay to this blkg

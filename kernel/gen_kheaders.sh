@@ -8,6 +8,8 @@ sfile="$(readlink -f "$0")"
 outdir="$(pwd)"
 tarfile=$1
 cpio_dir=$outdir/$tarfile.tmp
+cpio=$abs_srctree/tools/build/cpio
+tar=$abs_srctree/tools/build/tar
 
 dir_list="
 include/
@@ -68,7 +70,7 @@ if [ "$building_out_of_srctree" ]; then
 		cd $srctree
 		for f in $dir_list
 			do find "$f" -name "*.h";
-		done | cpio --quiet -pd $cpio_dir
+		done | $cpio --quiet -pd $cpio_dir
 	)
 fi
 
@@ -76,17 +78,20 @@ fi
 # of tree builds having stale headers in srctree. Just silence CPIO for now.
 for f in $dir_list;
 	do find "$f" -name "*.h";
-done | cpio --quiet -pd $cpio_dir >/dev/null 2>&1
+done | cpio --quiet -pdu $cpio_dir >/dev/null 2>&1
 
 # Remove comments except SDPX lines
 find $cpio_dir -type f -print0 |
 	xargs -0 -P8 -n1 perl -pi -e 'BEGIN {undef $/;}; s/\/\*((?!SPDX).)*?\*\///smg;'
 
 # Create archive and try to normalize metadata for reproducibility.
-tar "${KBUILD_BUILD_TIMESTAMP:+--mtime=$KBUILD_BUILD_TIMESTAMP}" \
+# For compatibility with older versions of tar, files are fed to tar
+# pre-sorted, as --sort=name might not be available.
+find $cpio_dir -printf "./%P\n" | LC_ALL=C sort | \
+    $tar "${KBUILD_BUILD_TIMESTAMP:+--mtime=$KBUILD_BUILD_TIMESTAMP}" \
     --exclude=".__afs*" --exclude=".nfs*" \
-    --owner=0 --group=0 --sort=name --numeric-owner --mode=u=rw,go=r,a+X \
-    -I $XZ -cf $tarfile -C $cpio_dir/ . > /dev/null
+    --owner=0 --group=0 --numeric-owner --no-recursion --mode=u=rw,go=r,a+X \
+    -I $XZ -cf $tarfile -C $cpio_dir/ -T - > /dev/null
 
 echo $headers_md5 > kernel/kheaders.md5
 echo "$this_file_md5" >> kernel/kheaders.md5

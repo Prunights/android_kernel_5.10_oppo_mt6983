@@ -31,6 +31,9 @@
 #include <linux/sizes.h>
 #include <linux/sched.h>
 #include <linux/pgtable.h>
+#include <linux/kasan.h>
+#include <linux/page_pinner.h>
+#include <linux/android_kabi.h>
 
 struct mempolicy;
 struct anon_vma;
@@ -40,6 +43,10 @@ struct user_struct;
 struct writeback_control;
 struct bdi_writeback;
 struct pt_regs;
+
+#if defined(CONFIG_CONT_PTE_HUGEPAGE)
+#define may_cont_pte android_kabi_reserved1 /* struct inode */
+#endif
 
 extern int sysctl_page_lock_unfairness;
 
@@ -113,6 +120,14 @@ extern int mmap_rnd_compat_bits __read_mostly;
 
 #ifndef __pa_symbol
 #define __pa_symbol(x)  __pa(RELOC_HIDE((unsigned long)(x), 0))
+#endif
+
+#ifndef __va_function
+#define __va_function(x) (x)
+#endif
+
+#ifndef __pa_function
+#define __pa_function(x) __pa_symbol(x)
 #endif
 
 #ifndef page_to_virt
@@ -354,6 +369,13 @@ extern unsigned int kobjsize(const void *objp);
 # define VM_GROWSUP	VM_NONE
 #endif
 
+#ifdef CONFIG_HAVE_ARCH_USERFAULTFD_MINOR
+# define VM_UFFD_MINOR_BIT	37
+# define VM_UFFD_MINOR		BIT(VM_UFFD_MINOR_BIT)	/* UFFD minor faults */
+#else /* !CONFIG_HAVE_ARCH_USERFAULTFD_MINOR */
+# define VM_UFFD_MINOR		VM_NONE
+#endif /* CONFIG_HAVE_ARCH_USERFAULTFD_MINOR */
+
 /* Bits set in the VMA until the stack is in its final location */
 #define VM_STACK_INCOMPLETE_SETUP	(VM_RAND_READ | VM_SEQ_READ)
 
@@ -456,6 +478,8 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_REMOTE			0x80
 #define FAULT_FLAG_INSTRUCTION  		0x100
 #define FAULT_FLAG_INTERRUPTIBLE		0x200
+/* Speculative fault, not holding mmap_sem */
+#define FAULT_FLAG_SPECULATIVE			0x400
 
 /*
  * The default fault flags that should be used by most of the
@@ -506,11 +530,18 @@ static inline bool fault_flag_allow_retry_first(unsigned int flags)
  * pgoff should be used in favour of virtual_address, if possible.
  */
 struct vm_fault {
-	struct vm_area_struct *vma;	/* Target VMA */
-	unsigned int flags;		/* FAULT_FLAG_xxx flags */
-	gfp_t gfp_mask;			/* gfp mask to be used for allocations */
-	pgoff_t pgoff;			/* Logical page offset based on vma */
-	unsigned long address;		/* Faulting virtual address */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	unsigned int sequence;
+	pmd_t orig_pmd;			/* value of PMD at the time of fault */
+#endif
+	const struct {
+		struct vm_area_struct *vma;	/* Target VMA */
+		gfp_t gfp_mask;			/* gfp mask to be used for allocations */
+		pgoff_t pgoff;			/* Logical page offset based on vma */
+		unsigned long address;		/* Faulting virtual address */
+	};
+	unsigned int flags;		/* FAULT_FLAG_xxx flags
+					 * XXX: should really be 'const' */
 	pmd_t *pmd;			/* Pointer to pmd entry matching
 					 * the 'address' */
 	pud_t *pud;			/* Pointer to pud entry matching
@@ -534,12 +565,19 @@ struct vm_fault {
 					 * is not NULL, otherwise pmd.
 					 */
 	pgtable_t prealloc_pte;		/* Pre-allocated pte page table.
-					 * vm_ops->map_pages() calls
-					 * alloc_set_pte() from atomic context.
+					 * vm_ops->map_pages() sets up a page
+					 * table from atomic context.
 					 * do_fault_around() pre-allocates
 					 * page table to avoid allocation from
 					 * atomic context.
 					 */
+	/*
+	 * These entries are required when handling speculative page fault.
+	 * This way the page handling is done using consistent field values.
+	 */
+	unsigned long vma_flags;
+	pgprot_t vma_page_prot;
+	ANDROID_OEM_DATA_ARRAY(1, 2);
 };
 
 /* page entry size for vm->huge_fault() */
@@ -562,7 +600,7 @@ struct vm_operations_struct {
 	vm_fault_t (*fault)(struct vm_fault *vmf);
 	vm_fault_t (*huge_fault)(struct vm_fault *vmf,
 			enum page_entry_size pe_size);
-	void (*map_pages)(struct vm_fault *vmf,
+	vm_fault_t (*map_pages)(struct vm_fault *vmf,
 			pgoff_t start_pgoff, pgoff_t end_pgoff);
 	unsigned long (*pagesize)(struct vm_area_struct * area);
 
@@ -614,7 +652,80 @@ struct vm_operations_struct {
 	 */
 	struct page *(*find_special_page)(struct vm_area_struct *vma,
 					  unsigned long addr);
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	bool (*allow_speculation)(void);
+#endif
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 };
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+extern bool config_bug_on;
+
+#define CHP_TAG "CHP"
+#define CHP_LOG_LVL 1
+
+enum {
+	CHP_LOG_VERBOSE = 0,
+	CHP_LOG_INFO,
+	CHP_LOG_DEBUG,
+	CHP_LOG_ERR,
+};
+
+static inline char chp_loglvl_to_char(int l)
+{
+	switch (l) {
+	case CHP_LOG_VERBOSE:
+		return 'V';
+	case CHP_LOG_INFO:
+		return 'I';
+	case CHP_LOG_DEBUG:
+		return 'D';
+	case CHP_LOG_ERR:
+		return 'E';
+	}
+	return '?';
+}
+
+#define chp_log(l, f, ...) do {						\
+	if (l >= CHP_LOG_LVL)						\
+		printk(KERN_INFO "%s %5d %5d %c %-16s: %s:%d "f,	\
+		       CHP_TAG, current->tgid, current->pid,		\
+		       chp_loglvl_to_char(l), current->comm, __func__,  \
+		       __LINE__,  ##__VA_ARGS__);			\
+} while (0)
+
+#define chp_loge(f, ...)						\
+	chp_log(CHP_LOG_ERR, f, ##__VA_ARGS__)
+
+#define chp_logi(f, ...)						\
+	chp_log(CHP_LOG_INFO, f, ##__VA_ARGS__)
+
+#define CHP_BUG_ON(condition) do {					\
+	if (unlikely(config_bug_on && condition))			\
+		BUG();							\
+} while (0)
+
+#define CHP_BUG_ON_EMERGENCY(condition) do {				\
+	if (unlikely(condition))					\
+		BUG();							\
+} while (0)
+#endif
+
+#define UNALIGNED_CONT_PTE_WARN WARN_ON
+
+static inline void INIT_VMA(struct vm_area_struct *vma)
+{
+	INIT_LIST_HEAD(&vma->anon_vma_chain);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	seqcount_init(&vma->vm_sequence);
+	atomic_set(&vma->vm_ref_count, 1);
+#endif
+}
 
 static inline void vma_init(struct vm_area_struct *vma, struct mm_struct *mm)
 {
@@ -623,7 +734,7 @@ static inline void vma_init(struct vm_area_struct *vma, struct mm_struct *mm)
 	memset(vma, 0, sizeof(*vma));
 	vma->vm_mm = mm;
 	vma->vm_ops = &dummy_vm_ops;
-	INIT_LIST_HEAD(&vma->anon_vma_chain);
+	INIT_VMA(vma);
 }
 
 static inline void vma_set_anonymous(struct vm_area_struct *vma)
@@ -704,8 +815,13 @@ struct inode;
  */
 static inline int put_page_testzero(struct page *page)
 {
+	int ret;
+
 	VM_BUG_ON_PAGE(page_ref_count(page) == 0, page);
-	return page_ref_dec_and_test(page);
+	ret = page_ref_dec_and_test(page);
+	page_pinner_put_page(page);
+
+	return ret;
 }
 
 /*
@@ -898,6 +1014,12 @@ static inline void set_compound_page_dtor(struct page *page,
 
 static inline void destroy_compound_page(struct page *page)
 {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#define PG_cont (__NR_PAGEFLAGS + 4)
+#define PageCont(page) test_bit(PG_cont, &(page)->flags)
+	CHP_BUG_ON(PageCont(page) && !PageError(page) && !PageUptodate(page));
+#endif
+
 	VM_BUG_ON_PAGE(page[1].compound_dtor >= NR_COMPOUND_DTORS, page);
 	compound_page_dtors[page[1].compound_dtor](page);
 }
@@ -967,14 +1089,16 @@ void free_compound_page(struct page *page);
  * pte_mkwrite.  But get_user_pages can cause write faults for mappings
  * that do not have writing enabled, when used by access_process_vm.
  */
-static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
+static inline pte_t maybe_mkwrite(pte_t pte, unsigned long vma_flags)
 {
-	if (likely(vma->vm_flags & VM_WRITE))
+	if (likely(vma_flags & VM_WRITE))
 		pte = pte_mkwrite(pte);
 	return pte;
 }
 
-vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page);
+vm_fault_t do_set_pmd(struct vm_fault *vmf, struct page *page);
+void do_set_pte(struct vm_fault *vmf, struct page *page, unsigned long addr);
+
 vm_fault_t finish_fault(struct vm_fault *vmf);
 vm_fault_t finish_mkwrite_fault(struct vm_fault *vmf);
 #endif
@@ -1229,6 +1353,7 @@ static inline void put_page(struct page *page)
  */
 #define GUP_PIN_COUNTING_BIAS (1U << 10)
 
+void put_user_page(struct page *page);
 void unpin_user_page(struct page *page);
 void unpin_user_pages_dirty_lock(struct page **pages, unsigned long npages,
 				 bool make_dirty);
@@ -1415,7 +1540,7 @@ static inline bool cpupid_match_pid(struct task_struct *task, int cpupid)
 }
 #endif /* CONFIG_NUMA_BALANCING */
 
-#ifdef CONFIG_KASAN_SW_TAGS
+#if defined(CONFIG_KASAN_SW_TAGS) || defined(CONFIG_KASAN_HW_TAGS)
 
 /*
  * KASAN per-page tags are stored xor'ed with 0xff. This allows to avoid
@@ -1425,26 +1550,33 @@ static inline bool cpupid_match_pid(struct task_struct *task, int cpupid)
 
 static inline u8 page_kasan_tag(const struct page *page)
 {
-	u8 tag;
+	u8 tag = 0xff;
 
-	tag = (page->flags >> KASAN_TAG_PGSHIFT) & KASAN_TAG_MASK;
-	tag ^= 0xff;
+	if (kasan_enabled()) {
+		tag = (page->flags >> KASAN_TAG_PGSHIFT) & KASAN_TAG_MASK;
+		tag ^= 0xff;
+	}
 
 	return tag;
 }
 
 static inline void page_kasan_tag_set(struct page *page, u8 tag)
 {
-	tag ^= 0xff;
-	page->flags &= ~(KASAN_TAG_MASK << KASAN_TAG_PGSHIFT);
-	page->flags |= (tag & KASAN_TAG_MASK) << KASAN_TAG_PGSHIFT;
+	if (kasan_enabled()) {
+		tag ^= 0xff;
+		page->flags &= ~(KASAN_TAG_MASK << KASAN_TAG_PGSHIFT);
+		page->flags |= (tag & KASAN_TAG_MASK) << KASAN_TAG_PGSHIFT;
+	}
 }
 
 static inline void page_kasan_tag_reset(struct page *page)
 {
-	page_kasan_tag_set(page, 0xff);
+	if (kasan_enabled())
+		page_kasan_tag_set(page, 0xff);
 }
-#else
+
+#else /* CONFIG_KASAN_SW_TAGS || CONFIG_KASAN_HW_TAGS */
+
 static inline u8 page_kasan_tag(const struct page *page)
 {
 	return 0xff;
@@ -1452,7 +1584,8 @@ static inline u8 page_kasan_tag(const struct page *page)
 
 static inline void page_kasan_tag_set(struct page *page, u8 tag) { }
 static inline void page_kasan_tag_reset(struct page *page) { }
-#endif
+
+#endif /* CONFIG_KASAN_SW_TAGS || CONFIG_KASAN_HW_TAGS */
 
 static inline struct zone *page_zone(const struct page *page)
 {
@@ -1653,8 +1786,14 @@ struct zap_details {
 	struct page *single_page;		/* Locked page to be unmapped */
 };
 
-struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
-			     pte_t pte);
+struct page *_vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
+			      pte_t pte, unsigned long vma_flags);
+static inline struct page *vm_normal_page(struct vm_area_struct *vma,
+					  unsigned long addr, pte_t pte)
+{
+	return _vm_normal_page(vma, addr, pte, vma->vm_flags);
+}
+
 struct page *vm_normal_page_pmd(struct vm_area_struct *vma, unsigned long addr,
 				pmd_t pmd);
 
@@ -1683,6 +1822,48 @@ int follow_phys(struct vm_area_struct *vma, unsigned long address,
 int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
 			void *buf, int len, int write);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static inline void vm_write_begin(struct vm_area_struct *vma)
+{
+        /*
+         * Isolated vma might be freed without exclusive mmap_lock but
+         * speculative page fault handler still needs to know it was changed.
+         */
+        if (!RB_EMPTY_NODE(&vma->vm_rb))
+	       mmap_assert_write_locked(vma->vm_mm);
+	/*
+	 * The reads never spins and preemption
+	 * disablement is not required.
+	 */
+	raw_write_seqcount_begin(&vma->vm_sequence);
+}
+static inline void vm_write_end(struct vm_area_struct *vma)
+{
+	raw_write_seqcount_end(&vma->vm_sequence);
+}
+
+static inline bool vma_has_changed(struct vm_fault *vmf)
+{
+	int ret = RB_EMPTY_NODE(&vmf->vma->vm_rb);
+	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
+
+	/*
+	 * Matches both the wmb in write_seqlock_{begin,end}() and
+	 * the wmb in vma_rb_erase().
+	 */
+	smp_rmb();
+
+	return ret || seq != vmf->sequence;
+}
+#else
+static inline void vm_write_begin(struct vm_area_struct *vma)
+{
+}
+static inline void vm_write_end(struct vm_area_struct *vma)
+{
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
+
 extern void truncate_pagecache(struct inode *inode, loff_t new);
 extern void truncate_setsize(struct inode *inode, loff_t newsize);
 void pagecache_isize_extended(struct inode *inode, loff_t from, loff_t to);
@@ -1698,6 +1879,46 @@ extern vm_fault_t handle_mm_fault(struct vm_area_struct *vma,
 extern int fixup_user_fault(struct mm_struct *mm,
 			    unsigned long address, unsigned int fault_flags,
 			    bool *unlocked);
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern vm_fault_t __handle_speculative_fault(struct mm_struct *mm,
+					     unsigned long address,
+					     unsigned int flags,
+					     struct vm_area_struct **vma,
+					     struct pt_regs *regs);
+static inline vm_fault_t handle_speculative_fault(struct mm_struct *mm,
+						  unsigned long address,
+						  unsigned int flags,
+						  struct vm_area_struct **vma,
+						  struct pt_regs *regs)
+{
+	/*
+	 * Try speculative page fault for multithreaded user space task only.
+	 */
+	if (!(flags & FAULT_FLAG_USER) || atomic_read(&mm->mm_users) == 1) {
+		*vma = NULL;
+		return VM_FAULT_RETRY;
+	}
+	return __handle_speculative_fault(mm, address, flags, vma, regs);
+}
+extern bool can_reuse_spf_vma(struct vm_area_struct *vma,
+			      unsigned long address);
+#else
+static inline vm_fault_t handle_speculative_fault(struct mm_struct *mm,
+						  unsigned long address,
+						  unsigned int flags,
+						  struct vm_area_struct **vma,
+						  struct pt_regs *regs)
+{
+	return VM_FAULT_RETRY;
+}
+static inline bool can_reuse_spf_vma(struct vm_area_struct *vma,
+				     unsigned long address)
+{
+	return false;
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
+
 void unmap_mapping_page(struct page *page);
 void unmap_mapping_pages(struct address_space *mapping,
 		pgoff_t start, pgoff_t nr, bool even_cows);
@@ -1903,27 +2124,28 @@ static inline unsigned long get_mm_counter(struct mm_struct *mm, int member)
 	return (unsigned long)val;
 }
 
-void mm_trace_rss_stat(struct mm_struct *mm, int member, long count);
+void mm_trace_rss_stat(struct mm_struct *mm, int member, long count,
+		       long value);
 
 static inline void add_mm_counter(struct mm_struct *mm, int member, long value)
 {
 	long count = atomic_long_add_return(value, &mm->rss_stat.count[member]);
 
-	mm_trace_rss_stat(mm, member, count);
+	mm_trace_rss_stat(mm, member, count, value);
 }
 
 static inline void inc_mm_counter(struct mm_struct *mm, int member)
 {
 	long count = atomic_long_inc_return(&mm->rss_stat.count[member]);
 
-	mm_trace_rss_stat(mm, member, count);
+	mm_trace_rss_stat(mm, member, count, 1);
 }
 
 static inline void dec_mm_counter(struct mm_struct *mm, int member)
 {
 	long count = atomic_long_dec_return(&mm->rss_stat.count[member]);
 
-	mm_trace_rss_stat(mm, member, count);
+	mm_trace_rss_stat(mm, member, count, -1);
 }
 
 /* Optimized variant when page is already known not to be PageAnon */
@@ -2527,16 +2749,29 @@ void anon_vma_interval_tree_verify(struct anon_vma_chain *node);
 extern int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin);
 extern int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	unsigned long end, pgoff_t pgoff, struct vm_area_struct *insert,
-	struct vm_area_struct *expand);
+	struct vm_area_struct *expand, bool keep_locked);
 static inline int vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	unsigned long end, pgoff_t pgoff, struct vm_area_struct *insert)
 {
-	return __vma_adjust(vma, start, end, pgoff, insert, NULL);
+	return __vma_adjust(vma, start, end, pgoff, insert, NULL, false);
 }
-extern struct vm_area_struct *vma_merge(struct mm_struct *,
+
+extern struct vm_area_struct *__vma_merge(struct mm_struct *mm,
 	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
-	unsigned long vm_flags, struct anon_vma *, struct file *, pgoff_t,
-	struct mempolicy *, struct vm_userfaultfd_ctx);
+	unsigned long vm_flags, struct anon_vma *anon, struct file *file,
+	pgoff_t pgoff, struct mempolicy *mpol, struct vm_userfaultfd_ctx uff,
+	const char __user *user, bool keep_locked);
+
+static inline struct vm_area_struct *vma_merge(struct mm_struct *mm,
+	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
+	unsigned long vm_flags, struct anon_vma *anon, struct file *file,
+	pgoff_t off, struct mempolicy *pol, struct vm_userfaultfd_ctx uff,
+	const char __user *user)
+{
+	return __vma_merge(mm, prev, addr, end, vm_flags, anon, file, off,
+			   pol, uff, user, false);
+}
+
 extern struct anon_vma *find_mergeable_anon_vma(struct vm_area_struct *);
 extern int __split_vma(struct mm_struct *, struct vm_area_struct *,
 	unsigned long addr, int new_below);
@@ -2643,9 +2878,12 @@ extern void truncate_inode_pages_final(struct address_space *);
 
 /* generic vm_area_ops exported for stackable file systems */
 extern vm_fault_t filemap_fault(struct vm_fault *vmf);
-extern void filemap_map_pages(struct vm_fault *vmf,
+extern vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 		pgoff_t start_pgoff, pgoff_t end_pgoff);
 extern vm_fault_t filemap_page_mkwrite(struct vm_fault *vmf);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern bool filemap_allow_speculation(void);
+#endif
 
 /* mm/page-writeback.c */
 int __must_check write_one_page(struct page *page);
@@ -2898,44 +3136,56 @@ extern int apply_to_existing_page_range(struct mm_struct *mm,
 				   unsigned long address, unsigned long size,
 				   pte_fn_t fn, void *data);
 
+extern void init_mem_debugging_and_hardening(void);
 #ifdef CONFIG_PAGE_POISONING
-extern bool page_poisoning_enabled(void);
-extern void kernel_poison_pages(struct page *page, int numpages, int enable);
+extern void __kernel_poison_pages(struct page *page, int numpages);
+extern void __kernel_unpoison_pages(struct page *page, int numpages);
+extern bool _page_poisoning_enabled_early;
+DECLARE_STATIC_KEY_FALSE(_page_poisoning_enabled);
+static inline bool page_poisoning_enabled(void)
+{
+	return _page_poisoning_enabled_early;
+}
+/*
+ * For use in fast paths after init_mem_debugging() has run, or when a
+ * false negative result is not harmful when called too early.
+ */
+static inline bool page_poisoning_enabled_static(void)
+{
+	return static_branch_unlikely(&_page_poisoning_enabled);
+}
+static inline void kernel_poison_pages(struct page *page, int numpages)
+{
+	if (page_poisoning_enabled_static())
+		__kernel_poison_pages(page, numpages);
+}
+static inline void kernel_unpoison_pages(struct page *page, int numpages)
+{
+	if (page_poisoning_enabled_static())
+		__kernel_unpoison_pages(page, numpages);
+}
 #else
 static inline bool page_poisoning_enabled(void) { return false; }
-static inline void kernel_poison_pages(struct page *page, int numpages,
-					int enable) { }
+static inline bool page_poisoning_enabled_static(void) { return false; }
+static inline void __kernel_poison_pages(struct page *page, int nunmpages) { }
+static inline void kernel_poison_pages(struct page *page, int numpages) { }
+static inline void kernel_unpoison_pages(struct page *page, int numpages) { }
 #endif
 
-#ifdef CONFIG_INIT_ON_ALLOC_DEFAULT_ON
-DECLARE_STATIC_KEY_TRUE(init_on_alloc);
-#else
 DECLARE_STATIC_KEY_FALSE(init_on_alloc);
-#endif
 static inline bool want_init_on_alloc(gfp_t flags)
 {
-	if (static_branch_unlikely(&init_on_alloc) &&
-	    !page_poisoning_enabled())
+	if (static_branch_unlikely(&init_on_alloc))
 		return true;
 	return flags & __GFP_ZERO;
 }
 
-#ifdef CONFIG_INIT_ON_FREE_DEFAULT_ON
-DECLARE_STATIC_KEY_TRUE(init_on_free);
-#else
 DECLARE_STATIC_KEY_FALSE(init_on_free);
-#endif
 static inline bool want_init_on_free(void)
 {
-	return static_branch_unlikely(&init_on_free) &&
-	       !page_poisoning_enabled();
+	return static_branch_unlikely(&init_on_free);
 }
 
-#ifdef CONFIG_DEBUG_PAGEALLOC
-extern void init_debug_pagealloc(void);
-#else
-static inline void init_debug_pagealloc(void) {}
-#endif
 extern bool _debug_pagealloc_enabled_early;
 DECLARE_STATIC_KEY_FALSE(_debug_pagealloc_enabled);
 
@@ -2969,12 +3219,27 @@ kernel_map_pages(struct page *page, int numpages, int enable)
 {
 	__kernel_map_pages(page, numpages, enable);
 }
+
+static inline void debug_pagealloc_map_pages(struct page *page, int numpages)
+{
+	if (debug_pagealloc_enabled_static())
+		__kernel_map_pages(page, numpages, 1);
+}
+
+static inline void debug_pagealloc_unmap_pages(struct page *page, int numpages)
+{
+	if (debug_pagealloc_enabled_static())
+		__kernel_map_pages(page, numpages, 0);
+}
+
 #ifdef CONFIG_HIBERNATION
 extern bool kernel_page_present(struct page *page);
 #endif	/* CONFIG_HIBERNATION */
 #else	/* CONFIG_DEBUG_PAGEALLOC || CONFIG_ARCH_HAS_SET_DIRECT_MAP */
 static inline void
 kernel_map_pages(struct page *page, int numpages, int enable) {}
+static inline void debug_pagealloc_map_pages(struct page *page, int numpages) {}
+static inline void debug_pagealloc_unmap_pages(struct page *page, int numpages) {}
 #ifdef CONFIG_HIBERNATION
 static inline bool kernel_page_present(struct page *page) { return true; }
 #endif	/* CONFIG_HIBERNATION */
@@ -3185,6 +3450,8 @@ unsigned long wp_shared_mapping_range(struct address_space *mapping,
 #endif
 
 extern int sysctl_nr_trim_pages;
+extern bool pte_map_lock_addr(struct vm_fault *vmf, unsigned long addr);
+extern int reclaim_shmem_address_space(struct address_space *mapping);
 
 /**
  * seal_check_future_write - Check for F_SEAL_FUTURE_WRITE flag and handle it
@@ -3217,6 +3484,722 @@ static inline int seal_check_future_write(int seals, struct vm_area_struct *vma)
 
 	return 0;
 }
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#define CONFIG_CONT_PTE_HUGEPAGE_DEBUG	1
+#define CONFIG_CONT_PTE_FAULT_AROUND	1
+#define EROFS_IOERROR_INJECTION		0
+#define CONFIG_CONT_PTE_HUGEPAGE_ANON_DEBUG 1
+#define CONFIG_POOL_ASYNC_RECLAIM 1
+#define CONFIG_REUSE_SWP_ACCOUNT_DEBUG 1
+#define CONFIG_MAPPED_WALK_MIDDLE_CONT_PTE_DEBUG 1
+#define CONFIG_NON_SPF_FAULT_RETRY_DEBUG 1
+#define CONFIG_CONT_PTE_FILE_HUGEPAGE_DISABLE 1
+#define CONFIG_CHP_ABMORMAL_PTES_DEBUG 1
+#define CONFIG_CHP_SPECIAL_PROCESS_BLACKLIST_ENABLE 0
+
+
+#if CONFIG_POOL_ASYNC_RECLAIM
+#define CONFIG_CONT_PTE_HUGEPAGE_LRU	1
+#endif
+
+#if CONFIG_POOL_ASYNC_RECLAIM
+#define CONFIG_POOL_DIRECT_RECLAIM	0
+#endif
+
+#define HPAGE_CONT_PTE_SHIFT	CONT_PTE_SHIFT
+#define HPAGE_CONT_PTE_ORDER	(CONT_PTE_SHIFT-PAGE_SHIFT)
+#define HPAGE_CONT_PTE_SIZE	CONT_PTE_SIZE
+#define HPAGE_CONT_PTE_MASK	CONT_PTE_MASK
+#define HPAGE_CONT_PTE_NR	CONT_PTES
+
+#define THP_SWAP_PRIO_MAGIC (0x1ead)
+
+#define ALIGN_UP(x, align_to) (((x) + ((align_to)-1)) & ~((align_to)-1))
+
+#define CLUSTER_FLAG_DOUBLE_MAP 8 /* This cluster is double-mapped */
+
+/* look_around use +1, ksrhink_lruvecd uses +2/+3 */
+#define PG_cont (__NR_PAGEFLAGS + 4)
+#define PG_cont_uptodate (PG_cont + 1)
+#define PG_cont_iodoing (PG_cont + 2)
+#define PG_cont_ioredo_s (PG_cont + 3)
+#define PG_cont_ioredo_e (PG_cont + 5)
+#define PG_cont_fallback (PG_cont + 6)
+#define PG_cont_refill (PG_cont + 7)
+#define PG_cont_ext_alloc (PG_cont + 8)
+
+#define PageCont(page) test_bit(PG_cont, &(page)->flags)
+#define SetPageCont(page) set_bit(PG_cont, &(page)->flags)
+#define ClearPageCont(page) clear_bit(PG_cont, &(page)->flags)
+#define TestClearPageCont(page) test_and_clear_bit(PG_cont, &(page)->flags)
+
+#define PageContUptodate(page) test_bit(PG_cont_uptodate, &(page)->flags)
+#define SetPageContUptodate(page) set_bit(PG_cont_uptodate, &(page)->flags)
+#define ClearPageContUptodate(page) clear_bit(PG_cont_uptodate, &(page)->flags)
+#define TestClearPageContUptodate(page) test_and_clear_bit(PG_cont_uptodate, &(page)->flags)
+
+#define PageContIODoing(page) test_bit(PG_cont_iodoing, &(page)->flags)
+#define SetPageContIODoing(page) set_bit(PG_cont_iodoing, &(page)->flags)
+#define ClearPageContIODoing(page) clear_bit(PG_cont_iodoing, &(page)->flags)
+#define TestClearPageContIODoing(page) test_and_clear_bit(PG_cont_iodoing, &(page)->flags)
+#define TestSetPageContIODoing(page) test_and_set_bit(PG_cont_iodoing, &(page)->flags)
+
+#define PageContFallback(page) test_bit(PG_cont_fallback, &(page)->flags)
+#define SetPageContFallback(page) set_bit(PG_cont_fallback, &(page)->flags)
+#define ClearPageContFallback(page) clear_bit(PG_cont_fallback, &(page)->flags)
+#define TestClearPageContFallback(page) test_and_clear_bit(PG_cont_fallback, &(page)->flags)
+
+#define PageContRefill(page) test_bit(PG_cont_refill, &(page)->flags)
+#define SetPageContRefill(page) set_bit(PG_cont_refill, &(page)->flags)
+#define ClearPageContRefill(page) clear_bit(PG_cont_refill, &(page)->flags)
+#define TestClearPageContRefill(page) test_and_clear_bit(PG_cont_refill, &(page)->flags)
+
+#define PageContExtAlloc(page) test_bit(PG_cont_ext_alloc, &(page)->flags)
+#define SetPageContExtAlloc(page) set_bit(PG_cont_ext_alloc, &(page)->flags)
+#define ClearPageContExtAlloc(page) clear_bit(PG_cont_ext_alloc, &(page)->flags)
+#define TestClearPageContExtAlloc(page) test_and_clear_bit(PG_cont_ext_alloc, &(page)->flags)
+
+
+#define SetPageHead(page) set_bit(PG_head, &(page)->flags)
+
+#define NORMAL_HUGE	1
+#define JAR_HUGE	2
+
+/* enum fault_flag, in case mainline is going to use 11-14 */
+#define FAULT_FLAG_CONT_PTE	(1 << 15)
+
+#define HIT_THP		0
+#define HIT_CONT	1
+#define HIT_BASEPAGE	2
+#define HIT_NOTHING	3
+
+#define MAX_POOL_ALLOC_RETRIES (2)
+
+#if CONFIG_POOL_ASYNC_RECLAIM
+enum pool_watermarks {
+	POOL_WMARK_MIN,
+	POOL_WMARK_LOW,
+	POOL_WMARK_HIGH,
+	POOL_NR_WMARK
+};
+
+#define POOL_USER_ALLOC (1 << 31)
+#define POOL_USER_ALLOC_MASK (1 << 31)
+/* add new flags to enum pgdat_flags  for pool wakeup kswapd */
+#define PGDAT_POOL_USER_ALLOC (PGDAT_RECLAIM_LOCKED + 1)
+
+#define POOL_DIRECT_RECLAIM_NR 5
+#define POOL_DIRECT_RECLAIM_PRIORITY 4
+#define POOL_FILE_HUGEPAGES_LIMIT  (500 * SZ_1M / PAGE_SIZE)
+
+/* FIXME: temp use for perf debug! */
+#define POOL_KSWAPD_RECLAIM 0
+#define POOL_DIRECT_RECLAIM 1
+#define POOL_RECLAIM_ITEM	2
+#define POOL_RECLAIM_SEQ_ITEM	20
+
+#define POOL_DIRECT_RECLAIM_ENTER 0
+#define POOL_DIRECT_RECLAIM_SUCCESS 1
+#define POOL_DIRECT_RECLAIM_FAIL 2
+#define POOL_DIRECT_RECLAIM_ITEM 3
+
+#define POOL_OOM_ENTER 0
+#define POOL_OOM_SUCCESS 1
+#define POOL_OOM_FAIL 2
+#define POOL_OOM_ITEM 3
+
+extern wait_queue_head_t pool_direct_reclaim_wait[MAX_NUMNODES];
+#endif
+
+enum hpage_type {
+	HPAGE_POOL_CMA,
+	HPAGE_POOL_BUDDY,
+
+	NR_HPAGE_POOL_TYPE,
+};
+
+struct chp_vma_name_address {
+	unsigned long dalvik_main;
+	union {
+		struct {
+			unsigned long scudo_primary, scudo_secondary;
+		};
+		struct {
+			unsigned long libc_malloc, libc_malloc_pad;
+		};
+	};
+};
+
+#if CONFIG_CONT_PTE_HUGEPAGE_LRU
+/*
+ * Use the deferred_split field in memcg or node to hold a pointer to
+ * lruvec (the split_queue_len in the deferred_split structure is reused
+ * as a pointer to this new lruvec), When a cont-pte hugepage is added to
+ * an lru, it is added to the lruvec to improve reclaim efficiency.
+ *
+ * Note:
+ * 1.Some of the accounting related to lru is still in some of the
+ * original data structures.
+ * 2.The chp is short for "cont pte hugepage".
+ */
+struct chp_lruvec {
+	struct lruvec lruvec;
+	unsigned long lru_zone_size[MAX_NR_ZONES][NR_LRU_LISTS];
+	struct deferred_split *ds; /* Point back to deferred_split */
+};
+
+
+#define CHP_SWAP_CLUSTER_MAX 256UL
+
+#define LRUVEC_FOR_CHP  1
+static inline bool is_chp_lruvec(struct lruvec *lruvec)
+{
+	return test_bit(LRUVEC_FOR_CHP, &lruvec->flags);
+}
+
+extern struct chp_lruvec contig_chp_lruvec;
+#define NODE_CHP_LRUVEC(nid)    (&contig_chp_lruvec)
+
+extern struct mem_cgroup_per_node *chp_lruvec_to_memcg_pn(struct lruvec *lruvec);
+#endif
+
+enum vm_chp_event_item {
+	CHP_PAGE_ALLOC_SLOWPATH = 0,
+	CHP_PAGE_ALLOC_FAILED,
+
+	CHP_MADV_FREE,
+	CHP_MADV_DONTNEED_UNALIGNED,
+
+	CHP_REFILL_WORKER_WAKE_UP,
+	CHP_REFILL_WORKER_ALLOC_SUCCESS,
+
+	CHP_REFILL_EXTALLOC,
+	CHP_ALLOC_ZSMALLOC,
+	CHP_ALLOC_GPU,
+	CHP_ALLOC_DMABUF,
+	CHP_ALLOC_FROM_BUDDY_POOL,
+
+	THP_DO_ANON_PAGES,
+	THP_DO_ANON_PAGES_FALLBACK,
+
+	THP_SWPIN_NO_SWAPCACHE_ENTRY,
+	THP_SWPIN_NO_SWAPCACHE_ALLOC_SUCCESS,
+	THP_SWPIN_NO_SWAPCACHE_ALLOC_FAIL,
+	THP_SWPIN_NO_SWAPCACHE_FALLBACK_ENTRY,
+	THP_SWPIN_NO_SWAPCACHE_FALLBACK_ALLOC_SUCCESS,
+	THP_SWPIN_NO_SWAPCACHE_FALLBACK_ALLOC_FAIL,
+	THP_SWPIN_SWAPCACHE_ENTRY,
+	THP_SWPIN_SWAPCACHE_ALLOC_SUCCESS,
+	THP_SWPIN_SWAPCACHE_PREPARE_FAIL,
+	THP_SWPIN_SWAPCACHE_FALLBACK_ENTRY,
+	THP_SWPIN_SWAPCACHE_FALLBACK_ALLOC_SUCCESS,
+	THP_SWPIN_SWAPCACHE_FALLBACK_ALLOC_FAIL,
+
+	THP_FILE_ENTRY,
+	THP_FILE_ALLOC_SUCCESS,
+	THP_FILE_ALLOC_FAIL,
+
+	THP_SWPIN_CRITICAL_ENTRY,
+	THP_SWPIN_CRITICAL_FALLBACK,
+
+	NR_VM_CHP_EVENT_ITEMS
+};
+
+enum thp_read_swpcache_ret_status {
+	RET_STATUS_ALLOC_THP_SUCCESS,
+	RET_STATUS_NO_SWP_INFO,
+	RET_STATUS_HIT_SWPCACHE,
+	RET_STATUS_NO_CLUSTER_INFO,
+	RET_STATUS_ZERO_SWPCOUNT,
+	RET_STATUS_ALLOC_THP_FAIL,
+	RET_STATUS_SWPCACHE_RPEPARE_FAIL,
+	RET_STATUS_ADD_TO_SWPCACHE_FAIL,
+	RET_STATUS_MEMCG_CHARGE_FAIL,
+	RET_STATUS_OTHER_FAIL,
+	RET_STATUS_NR,
+};
+
+enum WP_REUSE_FAIL_STAT {
+	WP_REUSE_FAIL_TOTAL,
+	PTE_NO_SAME,
+	PTE_NO_READONLY,
+	ZERO_REF_COUNT,
+	WP_REUSE_FAIL_NR,
+};
+
+#if CONFIG_REUSE_SWP_ACCOUNT_DEBUG
+enum REUSE_SWP_STAT {
+	NORMAL_REUSE_SWP_WB,
+	NORMAL_REUSE_SWP_NO_WB,
+	NORMAL_REUSE_SWP_WB_ERR,
+	CHP_REUSE_SWP_WB,
+	CHP_REUSE_SWP_NO_WB,
+	CHP_REUSE_SWP_WB_ERR,
+	REUSE_SWP_NR,
+};
+#endif
+
+#if CONFIG_MAPPED_WALK_MIDDLE_CONT_PTE_DEBUG
+#define MAPPED_WALK_HIT_SEQ 10
+struct mapped_walk_middle_cont_pte_stat {
+	unsigned long ori_addr, addr;
+	pteval_t pte[HPAGE_CONT_PTE_NR];
+	struct page *page;
+	unsigned long page_pfn;
+	unsigned long pte_pfn;
+};
+#endif
+
+#if CONFIG_NON_SPF_FAULT_RETRY_DEBUG
+enum NON_SFP_FAULT_RETRY_STAT {
+	SWPIN_CHP_FAULT_RETRY,
+	SWPIN_FALLBACK_FAULT_RETRY,
+	FAULT_RETRY_NR,
+};
+#endif
+
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+#define CHP_ABMORMAL_PTES_SEQ 100
+#define CORRUPT_CONT_PTE_REASON_MASK			0x00000000ffffffff
+#define DOUBLE_MAP_REASON_MASK 				0xffffffff00000000
+/* bit:0-31 -> corrupt cont pte */
+#define CORRUPT_CONT_PTE_REASON_MADVISE_PAGE_OUT	0x0000000000000001
+#define CORRUPT_CONT_PTE_REASON_MADVISE_FREE1		0x0000000000000002
+#define CORRUPT_CONT_PTE_REASON_MADVISE_FREE2		0x0000000000000004
+#define CORRUPT_CONT_PTE_REASON_CP_PTE_RANGE1		0x0000000000000008
+#define CORRUPT_CONT_PTE_REASON_CP_PTE_RANGE2		0x0000000000000010
+#define CORRUPT_CONT_PTE_REASON_ZAP_PTE_RANGE		0x0000000000000020
+#define CORRUPT_CONT_PTE_REASON_WP_PAGE_CP1		0x0000000000000040
+#define CORRUPT_CONT_PTE_REASON_WP_PAGE_CP2		0x0000000000000080
+#define CORRUPT_CONT_PTE_REASON_DO_WP_PAGE		0x0000000000000100
+#define CORRUPT_CONT_PTE_REASON_PTE_FAULT		0x0000000000000200
+#define CORRUPT_CONT_PTE_REASON_CH_PTE_RANGE		0x0000000000000400
+#define CORRUPT_CONT_PTE_REASON_PAGE_REFS_ONE		0x0000000000000800
+#define CORRUPT_CONT_PTE_REASON_SPLIT_CONT_PTE		0x0000000000001000
+#define CORRUPT_CONT_PTE_REASON_PTE_READONLY		0x0000000000002000
+#define CORRUPT_CONT_PTE_REASON_PTE_PRERM		0x0000000000004000
+/* bit:32-63 -> double map */
+#define DOUBLE_MAP_REASON_MADVISE			0x0000000100000000
+#define DOUBLE_MAP_REASON_DO_SWAP_PAGE1			0x0000000200000000
+#define DOUBLE_MAP_REASON_DO_SWAP_PAGE2			0x0000000400000000
+#define DOUBLE_MAP_REASON_SPLIT_VMA			0x0000000800000000
+#define DOUBLE_MAP_REASON_MOVE_PTES			0x0000001000000000
+
+struct chp_abnormal_ptes_stat {
+	uid_t uid;
+	pid_t pid;
+	char comm[TASK_COMM_LEN];
+	unsigned long reason;
+};
+#endif /* CONFIG_CHP_ABMORMAL_PTES_DEBUG */
+
+struct cont_pte_huge_page_stat {
+	/* reserved last index for alloc fail */
+	atomic64_t usage[NR_HPAGE_POOL_TYPE];
+	atomic64_t thp_read_swpcache_ret_status_stat[RET_STATUS_NR];
+#if CONFIG_POOL_ASYNC_RECLAIM
+	atomic64_t kswapd_wakeup_count;
+	atomic64_t wmark_count[2];
+	atomic64_t direct_reclaim_stat[POOL_DIRECT_RECLAIM_ITEM];
+	atomic64_t oom_stat[POOL_OOM_ITEM];
+	atomic64_t reclaim_seq[POOL_RECLAIM_ITEM];
+	atomic64_t reclaim_count[POOL_RECLAIM_ITEM][POOL_RECLAIM_SEQ_ITEM];
+	s64 reclaim_time[POOL_RECLAIM_ITEM][POOL_RECLAIM_SEQ_ITEM];
+#endif
+	s64 chunk_refill_time;
+	atomic64_t chunk_refill_fail_count;
+	s64 chunk_refill_first_fail_num;
+	atomic64_t cma_steal_count;
+	atomic64_t wp_reuse_fail_count[WP_REUSE_FAIL_NR];
+#if CONFIG_REUSE_SWP_ACCOUNT_DEBUG
+	/* for reuse_swap_page */
+	atomic64_t reuse_swp_count[REUSE_SWP_NR];
+#endif
+	atomic64_t truncate_hit_middle_page_cnt;
+	atomic64_t cp_cont_pte_split_count;
+#if CONFIG_MAPPED_WALK_MIDDLE_CONT_PTE_DEBUG
+	atomic64_t mapped_walk_middle_cont_pte_cnt;
+	atomic64_t mapped_walk_start_from_non_head;
+	atomic64_t mapped_walk_lastmoment_doublemap;
+	struct mapped_walk_middle_cont_pte_stat mapped_walk_stat[MAPPED_WALK_HIT_SEQ];
+#endif
+#if CONFIG_NON_SPF_FAULT_RETRY_DEBUG
+	atomic64_t non_sfp_fault_retry_cnt[FAULT_RETRY_NR];
+#endif
+
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+	atomic64_t chp_abnormal_ptes_uid_cnt;
+	struct chp_abnormal_ptes_stat abps[CHP_ABMORMAL_PTES_SEQ];
+#endif
+};
+
+extern struct cont_pte_huge_page_stat perf_stat;
+
+struct huge_page_pool {
+#if CONFIG_POOL_ASYNC_RECLAIM
+	unsigned long wmark[POOL_NR_WMARK];
+#endif
+	int count[NR_HPAGE_POOL_TYPE];
+	int low, high;
+	int min_buddy;
+	int cma_count;
+	unsigned long flags;
+	struct list_head items[NR_HPAGE_POOL_TYPE];
+	spinlock_t spinlock;
+	struct task_struct *refill_worker;
+};
+
+extern atomic_long_t cont_pte_double_map_count;
+extern atomic64_t thp_swpin_hit_swapcache;
+extern atomic64_t thp_cow;
+extern atomic64_t thp_cow_fallback;
+
+static inline bool transhuge_cont_pte_addr_suitable(struct vm_area_struct *vma,
+						    unsigned long haddr)
+{
+	return ((haddr >= vma->vm_start) && (haddr + HPAGE_CONT_PTE_SIZE <= vma->vm_end));
+}
+
+static inline bool transhuge_cont_pte_vma_aligned(struct vm_area_struct *vma)
+{
+	return IS_ALIGNED((vma->vm_start >> PAGE_SHIFT) - vma->vm_pgoff, HPAGE_CONT_PTE_NR);
+
+}
+
+extern inline bool transhuge_cont_pte_vma_suitable(struct vm_area_struct *vma,
+						   unsigned long haddr);
+
+extern bool reuse_swap_cont_pte_page(struct page *page, int *total_map_swapcount);
+
+#define cont_ptep_clear_flush_young_notify(__vma, __address, __ptep)	\
+({									\
+	int __young = 0;						\
+	unsigned long i;						\
+	struct vm_area_struct *___vma = __vma;				\
+	unsigned long ___address = __address & HPAGE_CONT_PTE_MASK;	\
+	for (i = 0; i < HPAGE_CONT_PTE_NR; i++)				\
+		__young |= ptep_test_and_clear_young(___vma,		\
+						    ___address +	\
+						    i * PAGE_SIZE,	\
+						    __ptep + i);	\
+	__young |= mmu_notifier_clear_flush_young(___vma->vm_mm,	\
+						___address,		\
+						___address +		\
+						HPAGE_CONT_PTE_SIZE);	\
+	__young;							\
+})
+
+#define cont_ptep_clear_flush_young_full(__vma, __address, __ptep)	\
+({									\
+	int __young = 0;						\
+	unsigned long i;						\
+	struct vm_area_struct *___vma = __vma;				\
+	unsigned long ___address = __address & HPAGE_CONT_PTE_MASK;	\
+	for (i = 0; i < HPAGE_CONT_PTE_NR; i++)				\
+		__young |= ptep_test_and_clear_young(___vma,		\
+						    ___address +	\
+						    i * PAGE_SIZE,	\
+						    __ptep + i);	\
+	if (__young)							\
+		flush_tlb_range(___vma, ___address,			\
+			___address + HPAGE_CONT_PTE_SIZE);		\
+})
+
+static inline bool cont_pte_none(pte_t *ptep)
+{
+	int i;
+
+	for (i = 0; i < HPAGE_CONT_PTE_NR; i++) {
+		if (!pte_none(*(ptep + i)))
+			return false;
+	}
+
+	return true;
+}
+
+static inline bool ContPteHugePageHead(struct page *page)
+{
+	if (PageTail(page))
+		return false;
+
+	return PageHead(page)
+	    && compound_order(page) == HPAGE_CONT_PTE_ORDER
+	    && (is_transparent_hugepage(page) || PageContExtAlloc(page));
+
+}
+
+extern inline bool within_cont_pte_cma(unsigned long pfn);
+
+static inline bool ContPteCMAHugePageHead(struct page *page)
+{
+	if (!ContPteHugePageHead(page))
+		return false;
+
+	return within_cont_pte_cma(page_to_pfn(page));
+}
+
+/**
+ * cont_pte_nr_pages - The number of regular pages in this cont-pte hugepage.
+ * @page: The head page of a cont-pte hugepage.
+ *  NOTE: use injudiciously!
+ */
+static inline int cont_pte_nr_pages(struct page *page)
+{
+	VM_BUG_ON_PGFLAGS(PageTail(page), page);
+	if (PageHead(page)) {
+		return page[1].compound_nr;
+	} else if (PageCont(page)) {
+		CHP_BUG_ON(!IS_ALIGNED(page_to_pfn(page), HPAGE_CONT_PTE_NR));
+		return HPAGE_CONT_PTE_NR;
+	}
+
+	return 1;
+}
+
+static inline bool ContPteHugePage(struct page *page)
+{
+	return PageTransCompound(page)
+	    && compound_order(compound_head(page)) == HPAGE_CONT_PTE_ORDER
+	    && is_transparent_hugepage(page);
+}
+
+/*
+ * huge file pages for .so, .oat. .odex in erofs are mapped massively, they are likely
+ * to be hot
+ */
+static inline bool ContPteHugePageSkipMassiveMapped(struct page *page)
+{
+	if (page && PageCont(page) && PageHead(page) && atomic_read(&page->_mapcount) > 20) {
+		/*
+		 * try to slow down the rmap for massively mapped hugepages, but we
+		 * still scan them so that they can be reclaimed if they are really
+		 * cold. skip 3/4 rmap.
+		 */
+		static int scan_pos;
+
+		return (scan_pos++ % 4) != 0;
+	}
+
+	return false;
+}
+
+static inline bool ContPteHugePageDoubleMap(struct page *page)
+{
+	int i;
+	struct page *head = compound_head(page);
+
+	if (PageAnon(head)) {
+		for (i = 0; i < HPAGE_CONT_PTE_NR; i++) {
+			if (atomic_read(&head[i]._mapcount) >= 0)
+				return true;
+		}
+	} else {
+
+		if (!PageDoubleMap(head))
+			return false;
+
+		for (i = 0; i < HPAGE_CONT_PTE_NR; i++) {
+			if (atomic_read(&head[i]._mapcount) !=
+					atomic_read(compound_mapcount_ptr(head)))
+				return true;
+		}
+
+		if (TestClearPageDoubleMap(page))
+			atomic_long_dec(&cont_pte_double_map_count);
+	}
+
+	return false;
+}
+
+extern struct cma *cont_pte_cma;
+extern unsigned long swap_cluster_double_mapped;
+
+extern inline bool is_cont_pte_cma(struct cma *cma);
+
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+extern inline bool commit_chp_abnormal_ptes_record(unsigned long reason);
+extern inline bool cont_pte_trans_huge(pte_t *ptep, unsigned long reason);
+#endif
+
+static inline int vmf_may_cont_pte(struct vm_fault *vmf)
+{
+	struct file *file = vmf->vma->vm_file;
+	struct address_space *mapping = file ? file->f_mapping : NULL;
+	struct inode *inode = mapping ? mapping->host : NULL;
+
+	return inode ? inode->may_cont_pte : false;
+}
+
+static inline bool cow_cont_pte_user_page(struct page *dst, struct page *src,
+		struct vm_fault *vmf)
+{
+	unsigned long addr = vmf->address & HPAGE_CONT_PTE_MASK;
+	int i;
+
+	for (i = 0; i < HPAGE_CONT_PTE_NR; i++) {
+		copy_user_highpage(dst + i, src + i, addr + i * PAGE_SIZE, vmf->vma);
+	}
+
+	return true;
+}
+
+static inline bool cont_pte_readonly(struct vm_fault *vmf)
+{
+	int i, nr = 0;
+	unsigned long haddr = vmf->address & HPAGE_CONT_PTE_MASK;
+	pte_t *ptep = vmf->pte - (vmf->address - haddr)/PAGE_SIZE;
+
+	/* someone else has changed ptes to non-cont */
+	if (!pte_cont(*ptep))
+		return false;
+
+	for (i = 0; i < HPAGE_CONT_PTE_NR; i++, ptep++) {
+		if (pte_write(*ptep))
+			nr++;
+
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+		if (!pte_cont(*ptep)) {
+			cont_pte_trans_huge(ptep, CORRUPT_CONT_PTE_REASON_PTE_READONLY);
+		}
+#endif
+	}
+
+	if (nr != HPAGE_CONT_PTE_NR && nr != 0) {
+		printk(KERN_ERR "@@@Fixme- partially writable in hugepage: %s current:%s-%d i:%d fault addr:%lx vma start:%lx end:%lx\n",
+				__func__, current->comm, current->pid, i, vmf->address, vmf->vma->vm_start, vmf->vma->vm_end);
+#if CONFIG_CHP_ABMORMAL_PTES_DEBUG
+		commit_chp_abnormal_ptes_record(CORRUPT_CONT_PTE_REASON_PTE_PRERM);
+#endif
+		CHP_BUG_ON(1);
+	}
+
+	return !nr;
+}
+
+static inline bool vma_is_chp_anonymous(struct vm_area_struct *vma)
+{
+	return vma->android_kabi_reserved2 == THP_SWAP_PRIO_MAGIC;
+}
+
+static inline int chp_swapin_nr_pages(struct page *page)
+{
+	if (PageContFallback(page))
+		return HPAGE_CONT_PTE_NR;
+
+	return thp_nr_pages(page);
+}
+
+#define cont_pte_pagefault_dump(vmf, reason) do { \
+	struct vm_area_struct *vma = vmf->vma; \
+	const char *name = vma->vm_file->f_path.dentry ? (const char *)vma->vm_file->f_path.dentry->d_name.name : "NULL"; \
+															\
+	pr_debug("%s %s %d: filename:%s inode:%ld process:%s aligned:%d index:%lx-%lx vm_pgoff:%lx vma:%lx-%lx r:%d w:%d x:%d mw:%d flags:%lx\n", \
+			reason, __func__, __LINE__, name, vma->vm_file->f_inode->i_ino,  current->comm, transhuge_cont_pte_vma_aligned(vma), \
+			vmf->page ? vmf->page->index : -1UL, vmf->pgoff, vma->vm_pgoff, (unsigned long)vma->vm_start, (unsigned long)vma->vm_end, \
+			!!(vma->vm_flags & VM_READ), !!(vma->vm_flags & VM_WRITE), !!(vma->vm_flags & VM_EXEC), \
+			!!(vma->vm_flags & VM_MAYWRITE), vma->vm_flags);\
+	} while (0)
+
+extern unsigned long cont_pte_pool_cma_size;
+extern bool cma_chunk_refill_ready;
+extern bool supported_oat_hugepage;
+
+extern struct huge_page_pool g_cont_pte_pool;
+
+extern inline bool cont_pte_huge_page_enabled(void);
+
+extern pte_t cont_pte_huge_ptep_get_and_clear(struct mm_struct *mm,
+					      unsigned long addr, pte_t *ptep);
+
+extern pte_t cont_pte_huge_ptep_get_and_clear_flush(struct mm_struct *mm,
+					      unsigned long addr, pte_t *ptep);
+
+extern void __split_huge_cont_pte(struct vm_area_struct *vma, pte_t *pte,
+				  unsigned long address, bool freeze,
+				  struct page *page, spinlock_t *ptl);
+
+extern void __split_huge_cont_pte_double_ptl(struct vm_area_struct *vma, pte_t *pte,
+				  unsigned long address, bool freeze,
+				  struct page *page, spinlock_t *src_ptl, spinlock_t *dst_ptl);
+
+extern void change_huge_cont_pte(struct vm_area_struct *vma, pte_t *pte,
+				 unsigned long addr, pgprot_t newprot,
+				 unsigned long cp_flags);
+
+extern void cont_pte_set_huge_pte_wrprotect(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep);
+
+extern void cont_pte_set_huge_pte_clean(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep);
+
+extern bool set_cont_pte_huge_zero_page(struct mm_struct *mm,
+		struct vm_area_struct *vma, unsigned long faddr, pte_t *pte,
+		struct page *zero_page);
+
+extern void split_huge_cont_pte_address(struct vm_area_struct *vma,
+					unsigned long address, bool freeze,
+					struct page *page);
+
+extern void __cont_pte_set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
+				pte_t *ptep, pte_t pte, bool flush);
+
+extern void cont_pte_set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep, pte_t pte);
+
+extern int find_get_cont_pte_pages(struct address_space *mapping, pgoff_t start,
+				   struct page **ret_page);
+
+extern struct page *find_get_entry_may_cont_pte(struct address_space *mapping,
+		pgoff_t index);
+
+extern struct file *do_cont_pte_sync_mmap_readahead(struct vm_fault *vmf);
+
+extern struct file *do_cont_pte_async_mmap_readahead(struct vm_fault *vmf, struct page *page);
+
+extern void do_set_cont_pte(struct vm_fault *vmf, struct page *page);
+
+extern void do_set_cont_pte_with_addr(struct vm_fault *vmf,
+				struct page *page,
+				unsigned long addr);
+
+extern void set_cont_pte_uptodate_and_unlock(struct page *page);
+
+extern void init_cont_endio_spinlock(struct inode *inode);
+
+extern int huge_page_pool_count(struct huge_page_pool *pool, int inx);
+extern int cont_pte_pool_total_pages(void);
+extern int cont_pte_pool_high(void);
+extern struct huge_page_pool *cont_pte_pool(void);
+extern bool cont_pte_pool_add(struct page *page);
+
+extern struct page *alloc_cont_pte_hugepage(gfp_t gfp_mask);
+extern struct page *alloc_chp_ext(gfp_t gfp_mask, int *order);
+
+extern inline void count_vm_chp_events(enum vm_chp_event_item item, long delta);
+extern inline void count_vm_chp_event(enum vm_chp_event_item item);
+extern inline void mod_chp_page_state(struct page *page, long delta);
+
+extern void __free_cont_pte_hugepages(struct page *page);
+
+vm_fault_t cont_pte_filemap_around(struct vm_fault *vmf, pgoff_t start_pgoff, pgoff_t end_pgoff);
+
+extern inline bool is_thp_swap(struct swap_info_struct *si);
+
+extern bool is_critical_native(struct task_struct *tsk);
+
+extern inline bool current_is_hybridswapd(void);
+extern void chp_uid_blacklist_update(void);
+extern unsigned long read_zram_used_pages(int inx);
+extern bool handle_chp_prctl_user_addrs(const char __user *name,
+					unsigned long start, unsigned long len);
+extern inline void handle_chp_get_unmapped_area(struct vm_unmapped_area_info *info,
+						struct file *filp,
+						unsigned long pgoff);
+extern inline bool handle_chp_ext_cmd(struct sysinfo *si);
+extern inline bool handle_chp_fs_supported(struct inode *inode);
+extern void handle_chp_load_elf_binary(const char *filename);
+#endif /* CONFIG_CONT_PTE_HUGEPAGE */
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */

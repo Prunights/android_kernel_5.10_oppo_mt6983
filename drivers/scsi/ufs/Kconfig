@@ -115,6 +115,7 @@ config SCSI_UFS_MEDIATEK
 	tristate "Mediatek specific hooks to UFS controller platform driver"
 	depends on SCSI_UFSHCD_PLATFORM && ARCH_MEDIATEK
 	select PHY_MTK_UFS
+	select RESET_TI_SYSCON
 	help
 	  This selects the Mediatek specific additions to UFSHCD platform driver.
 	  UFS host on Mediatek needs some vendor specific configuration before
@@ -122,6 +123,18 @@ config SCSI_UFS_MEDIATEK
 	  specific registers.
 
 	  Select this if you have UFS controller on Mediatek chipset.
+
+	  If unsure, say N.
+
+config SCSI_UFS_MEDIATEK_DBG
+	tristate "Debugging facility for MediaTek UFS platforms"
+	depends on SCSI_UFS_MEDIATEK
+	help
+	  This selects the debugging facility for Mediatek UFS platforms.
+	  Provide UFS command history and connection to MediaTek Block IO
+	  Tracer.
+
+	  Select this if you want to enable above facilities.
 
 	  If unsure, say N.
 
@@ -182,3 +195,20 @@ config SCSI_UFS_CRYPTO
 	  Enabling this makes it possible for the kernel to use the crypto
 	  capabilities of the UFS device (if present) to perform crypto
 	  operations on data being transferred to/from the device.
+
+config SCSI_UFS_HPB
+	bool "Support UFS Host Performance Booster"
+	depends on SCSI_UFSHCD
+	help
+	  The UFS HPB feature improves random read performance. It caches
+	  L2P (logical to physical) map of UFS to host DRAM. The driver uses HPB
+	  read command by piggybacking physical page number for bypassing FTL (flash
+	  translation layer)'s L2P address translation.
+
+config MTK_UFS_DEBUG
+	bool "Support Mediatek UFS debug feature"
+	depends on SCSI_UFSHCD
+	help
+	  If it is enabled, UFS flow will change for GKI
+
+source "drivers/scsi/ufs/vendor/Kconfig"

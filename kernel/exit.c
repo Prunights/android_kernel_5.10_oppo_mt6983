@@ -64,11 +64,16 @@
 #include <linux/rcuwait.h>
 #include <linux/compat.h>
 #include <linux/io_uring.h>
-#include <linux/sysfs.h>
 
 #include <linux/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/mmu_context.h>
+#include <trace/hooks/mm.h>
+#include <trace/hooks/dtask.h>
+
+#ifdef OPLUS_BUG_STABILITY
+#include <soc/oplus/system/oppo_process.h>
+#endif
 
 /*
  * The default value should be high enough to not crash a system that randomly
@@ -381,6 +386,12 @@ kill_orphaned_pgrp(struct task_struct *tsk, struct task_struct *parent)
 	    task_session(parent) == task_session(tsk) &&
 	    will_become_orphaned_pgrp(pgrp, ignored_task) &&
 	    has_stopped_jobs(pgrp)) {
+#ifdef OPLUS_BUG_STABILITY
+            if (oppo_is_android_core_group(pgrp)) {
+                printk("kill_orphaned_pgrp: find android core process will be hungup, ignored it, only hungup itself:%s:%d , current=%d \n",tsk->comm,tsk->pid,current->pid);
+                return;
+            }
+#endif /*OPLUS_BUG_STABILITY*/
 		__kill_pgrp_info(SIGHUP, SEND_SIG_PRIV, pgrp);
 		__kill_pgrp_info(SIGCONT, SEND_SIG_PRIV, pgrp);
 	}
@@ -533,6 +544,7 @@ static void exit_mm(void)
 	enter_lazy_tlb(mm, current);
 	task_unlock(current);
 	mm_update_next_owner(mm);
+	trace_android_vh_exit_mm(mm);
 	mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
@@ -763,6 +775,11 @@ void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
 	int group_dead;
+#ifdef OPLUS_BUG_STABILITY
+    if (is_critial_process(tsk)) {
+        printk("critical svc %d:%s exit with %ld !\n", tsk->pid, tsk->comm,code);
+    }
+#endif /*OPLUS_BUG_STABILITY*/
 
 	/*
 	 * We can get here from a kernel oops, sometimes with preemption off.
@@ -820,6 +837,7 @@ void __noreturn do_exit(long code)
 		sync_mm_rss(tsk->mm);
 	acct_update_integrals(tsk);
 	group_dead = atomic_dec_and_test(&tsk->signal->live);
+	trace_android_vh_exit_check(current, code, group_dead);
 	if (group_dead) {
 		/*
 		 * If the last thread of global init has exited, panic

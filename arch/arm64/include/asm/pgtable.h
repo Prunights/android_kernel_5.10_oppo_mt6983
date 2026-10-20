@@ -303,7 +303,10 @@ static inline void __check_racy_pte_update(struct mm_struct *mm, pte_t *ptep,
 	 * (ptep_set_access_flags safely changes valid ptes without going
 	 * through an invalid entry).
 	 */
-	VM_WARN_ONCE(!pte_young(pte),
+	 /*
+	  * split cont_pte(remove cont bit in pte ) will not change page young
+	  */
+	VM_WARN_ONCE(!pte_young(pte) && !IS_ENABLED(CONFIG_CONT_PTE_HUGEPAGE),
 		     "%s: racy access flag clearing: 0x%016llx -> 0x%016llx",
 		     __func__, pte_val(old_pte), pte_val(pte));
 	VM_WARN_ONCE(pte_write(old_pte) && !pte_dirty(pte),
@@ -323,6 +326,13 @@ static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 
 	__check_racy_pte_update(mm, ptep, pte);
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+#define UNALIGNED_CONT_PTE_WARN WARN_ON
+	/* 16 ptes of cont_pte should be set as a whole by copied cset_pte_at */
+	WARN_ON_ONCE((pte_cont(pte) || pte_cont(*ptep)) && current->mm);
+	UNALIGNED_CONT_PTE_WARN(pte_cont(pte) && ((pte_pfn(pte) & (CONT_PTES - 1)) !=
+			((unsigned long)ptep & (sizeof(pte) * CONT_PTES - 1)) / sizeof(pte)));
+#endif
 	set_pte(ptep, pte);
 }
 
@@ -468,6 +478,7 @@ static inline pmd_t pmd_mkdevmap(pmd_t pmd)
 #define pfn_pud(pfn,prot)	__pud(__phys_to_pud_val((phys_addr_t)(pfn) << PAGE_SHIFT) | pgprot_val(prot))
 
 #define set_pmd_at(mm, addr, pmdp, pmd)	set_pte_at(mm, addr, (pte_t *)pmdp, pmd_pte(pmd))
+#define set_pud_at(mm, addr, pudp, pud)	set_pte_at(mm, addr, (pte_t *)pudp, pud_pte(pud))
 
 #define __p4d_to_phys(p4d)	__pte_to_phys(p4d_pte(p4d))
 #define __phys_to_p4d_val(phys)	__phys_to_pte_val(phys)
@@ -505,6 +516,15 @@ static inline pmd_t pmd_mkdevmap(pmd_t pmd)
 	__pgprot_modify(prot, PTE_ATTRINDX_MASK, \
 			PTE_ATTRINDX(MT_NORMAL_NC) | PTE_PXN | PTE_UXN)
 
+/*
+ * Mark the prot value as outer cacheable and inner non-cacheable. Non-coherent
+ * devices on a system with support for a system or last level cache use these
+ * attributes to cache allocations in the system cache.
+ */
+#define pgprot_syscached(prot) \
+	__pgprot_modify(prot, PTE_ATTRINDX_MASK, \
+			PTE_ATTRINDX(MT_NORMAL_iNC_oWB) | PTE_PXN | PTE_UXN)
+
 #define __HAVE_PHYS_MEM_ACCESS_PROT
 struct file;
 extern pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
@@ -538,6 +558,13 @@ extern pgd_t tramp_pg_dir[PTRS_PER_PGD];
 extern pgd_t reserved_pg_dir[PTRS_PER_PGD];
 
 extern void set_swapper_pgd(pgd_t *pgdp, pgd_t pgd);
+
+#ifdef CONFIG_MEMORY_HOTPLUG
+extern int populate_range_driver_managed(u64 start, u64 size,
+		const char *resource_name);
+extern int depopulate_range_driver_managed(u64 start, u64 size,
+		const char *resource_name);
+#endif
 
 static inline bool in_swapper_pgdir(void *addr)
 {
@@ -989,7 +1016,17 @@ static inline bool arch_faults_on_old_pte(void)
 
 	return !cpu_has_hw_af();
 }
-#define arch_faults_on_old_pte arch_faults_on_old_pte
+#define arch_faults_on_old_pte		arch_faults_on_old_pte
+
+/*
+ * Experimentally, it's cheap to set the access flag in hardware and we
+ * benefit from prefaulting mappings as 'old' to start with.
+ */
+static inline bool arch_wants_old_prefaulted_pte(void)
+{
+	return !arch_faults_on_old_pte();
+}
+#define arch_wants_old_prefaulted_pte	arch_wants_old_prefaulted_pte
 
 #endif /* !__ASSEMBLY__ */
 

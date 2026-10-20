@@ -53,9 +53,6 @@
 
 #include <trace/events/sched.h>
 
-static bool dump_vma_snapshot(struct coredump_params *cprm);
-static void free_vma_snapshot(struct coredump_params *cprm);
-
 int core_uses_pid;
 unsigned int core_pipe_limit;
 char core_pattern[CORENAME_MAX_SIZE] = "core";
@@ -523,7 +520,19 @@ static bool dump_interrupted(void)
 	 * but then we need to teach dump_write() to restart and clear
 	 * TIF_SIGPENDING.
 	 */
+#ifdef CONFIG_MTK_AVOID_TRUNCATE_COREDUMP
+	/* avoid coredump truncated */
+	int ret = signal_pending(current);
+
+	if (ret) {
+		pr_info("%s: clear sig pending flag\n", __func__);
+		clear_thread_flag(TIF_SIGPENDING);
+		ret = signal_pending(current);
+	}
+	return ret;
+#else
 	return fatal_signal_pending(current) || freezing(current);
+#endif
 }
 
 static void wait_for_dump_helpers(struct file *file)
@@ -578,6 +587,52 @@ static int umh_pipe_setup(struct subprocess_info *info, struct cred *new)
 	return err;
 }
 
+#ifdef CONFIG_MTK_AVOID_TRUNCATE_COREDUMP
+#include <linux/suspend.h>
+
+static atomic_t coredump_request_count = ATOMIC_INIT(0);
+
+static int coredump_pm_notifier_cb(struct notifier_block *nb,
+	unsigned long event, void *ptr)
+{
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+		if (atomic_read(&coredump_request_count) > 0) {
+			pr_info("%s coredump is on going", __func__);
+			return NOTIFY_BAD;
+		} else
+			return NOTIFY_DONE;
+	default:
+		return NOTIFY_DONE;
+	}
+	return NOTIFY_DONE;
+}
+
+/* Hibernation and suspend events */
+static struct notifier_block coredump_pm_notifier_block = {
+	.notifier_call = coredump_pm_notifier_cb,
+};
+
+static int __init init_coredump(void)
+{
+	/* register pm notifier */
+	int ret = register_pm_notifier(&coredump_pm_notifier_block);
+
+	if (ret)
+		pr_info("%s: failed to register_pm_notifier(%d)\n",
+				__func__, ret);
+	return 0;
+}
+
+static void __exit exit_coredump(void)
+{
+	/* unregister pm notifier */
+	unregister_pm_notifier(&coredump_pm_notifier_block);
+}
+
+late_initcall(init_coredump);
+module_exit(exit_coredump);
+#endif
 void do_coredump(const kernel_siginfo_t *siginfo)
 {
 	struct core_state core_state;
@@ -590,6 +645,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 	int ispipe;
 	size_t *argv = NULL;
 	int argc = 0;
+	struct files_struct *displaced;
 	/* require nonrelative corefile path and be extra careful */
 	bool need_suid_safe = false;
 	bool core_dumped = false;
@@ -604,8 +660,11 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 		 * by any locks.
 		 */
 		.mm_flags = mm->flags,
-		.vma_meta = NULL,
 	};
+
+#ifdef CONFIG_MTK_AVOID_TRUNCATE_COREDUMP
+	atomic_inc(&coredump_request_count);
+#endif
 
 	audit_core_dumps(siginfo->si_signo);
 
@@ -796,9 +855,11 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 	}
 
 	/* get us an unshared descriptor table; almost always a no-op */
-	retval = unshare_files();
+	retval = unshare_files(&displaced);
 	if (retval)
 		goto close_fail;
+	if (displaced)
+		put_files_struct(displaced);
 	if (!dump_interrupted()) {
 		/*
 		 * umh disabled with CONFIG_STATIC_USERMODEHELPER_PATH="" would
@@ -808,13 +869,9 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 			pr_info("Core dump to |%s disabled\n", cn.corename);
 			goto close_fail;
 		}
-		if (!dump_vma_snapshot(&cprm))
-			goto close_fail;
-
 		file_start_write(cprm.file);
 		core_dumped = binfmt->core_dump(&cprm);
 		file_end_write(cprm.file);
-		free_vma_snapshot(&cprm);
 	}
 	if (ispipe && core_pipe_limit)
 		wait_for_dump_helpers(cprm.file);
@@ -832,6 +889,9 @@ fail_unlock:
 fail_creds:
 	put_cred(cred);
 fail:
+#ifdef CONFIG_MTK_AVOID_TRUNCATE_COREDUMP
+	atomic_dec(&coredump_request_count);
+#endif
 	return;
 }
 
@@ -906,7 +966,7 @@ int dump_user_range(struct coredump_params *cprm, unsigned long start,
 
 			stop = !dump_emit(cprm, kaddr, PAGE_SIZE);
 			kunmap(page);
-			put_page(page);
+			put_user_page(page);
 		} else {
 			stop = !dump_skip(cprm, PAGE_SIZE);
 		}
@@ -1086,29 +1146,18 @@ static struct vm_area_struct *next_vma(struct vm_area_struct *this_vma,
 	return gate_vma;
 }
 
-static void free_vma_snapshot(struct coredump_params *cprm)
-{
-	if (cprm->vma_meta) {
-		int i;
-		for (i = 0; i < cprm->vma_count; i++) {
-			struct file *file = cprm->vma_meta[i].file;
-			if (file)
-				fput(file);
-		}
-		kvfree(cprm->vma_meta);
-		cprm->vma_meta = NULL;
-	}
-}
-
 /*
  * Under the mmap_lock, take a snapshot of relevant information about the task's
  * VMAs.
  */
-static bool dump_vma_snapshot(struct coredump_params *cprm)
+int dump_vma_snapshot(struct coredump_params *cprm, int *vma_count,
+		      struct core_vma_metadata **vma_meta,
+		      size_t *vma_data_size_ptr)
 {
 	struct vm_area_struct *vma, *gate_vma;
 	struct mm_struct *mm = current->mm;
 	int i;
+	size_t vma_data_size = 0;
 
 	/*
 	 * Once the stack expansion code is fixed to not change VMA bounds
@@ -1116,37 +1165,36 @@ static bool dump_vma_snapshot(struct coredump_params *cprm)
 	 * mmap_lock in read mode.
 	 */
 	if (mmap_write_lock_killable(mm))
-		return false;
+		return -EINTR;
 
-	cprm->vma_data_size = 0;
 	gate_vma = get_gate_vma(mm);
-	cprm->vma_count = mm->map_count + (gate_vma ? 1 : 0);
+	*vma_count = mm->map_count + (gate_vma ? 1 : 0);
 
-	cprm->vma_meta = kvmalloc_array(cprm->vma_count, sizeof(*cprm->vma_meta), GFP_KERNEL);
-	if (!cprm->vma_meta) {
+	*vma_meta = kvmalloc_array(*vma_count, sizeof(**vma_meta), GFP_KERNEL);
+	if (!*vma_meta) {
 		mmap_write_unlock(mm);
-		return false;
+		return -ENOMEM;
 	}
 
 	for (i = 0, vma = first_vma(current, gate_vma); vma != NULL;
 			vma = next_vma(vma, gate_vma), i++) {
-		struct core_vma_metadata *m = cprm->vma_meta + i;
+		struct core_vma_metadata *m = (*vma_meta) + i;
 
 		m->start = vma->vm_start;
 		m->end = vma->vm_end;
 		m->flags = vma->vm_flags;
 		m->dump_size = vma_dump_size(vma, cprm->mm_flags);
-		m->pgoff = vma->vm_pgoff;
-
-		m->file = vma->vm_file;
-		if (m->file)
-			get_file(m->file);
 	}
 
 	mmap_write_unlock(mm);
 
-	for (i = 0; i < cprm->vma_count; i++) {
-		struct core_vma_metadata *m = cprm->vma_meta + i;
+	if (WARN_ON(i != *vma_count)) {
+		kvfree(*vma_meta);
+		return -EFAULT;
+	}
+
+	for (i = 0; i < *vma_count; i++) {
+		struct core_vma_metadata *m = (*vma_meta) + i;
 
 		if (m->dump_size == DUMP_SIZE_MAYBE_ELFHDR_PLACEHOLDER) {
 			char elfmag[SELFMAG];
@@ -1159,8 +1207,9 @@ static bool dump_vma_snapshot(struct coredump_params *cprm)
 			}
 		}
 
-		cprm->vma_data_size += m->dump_size;
+		vma_data_size += m->dump_size;
 	}
 
-	return true;
+	*vma_data_size_ptr = vma_data_size;
+	return 0;
 }

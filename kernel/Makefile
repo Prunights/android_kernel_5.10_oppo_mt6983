@@ -38,6 +38,9 @@ KASAN_SANITIZE_kcov.o := n
 KCSAN_SANITIZE_kcov.o := n
 CFLAGS_kcov.o := $(call cc-option, -fno-conserve-stack) -fno-stack-protector
 
+# Don't instrument error handlers
+CFLAGS_REMOVE_cfi.o := $(CC_FLAGS_CFI)
+
 obj-y += sched/
 obj-y += locking/
 obj-y += power/
@@ -108,6 +111,7 @@ obj-$(CONFIG_BPF) += bpf/
 obj-$(CONFIG_KCSAN) += kcsan/
 obj-$(CONFIG_SHADOW_CALL_STACK) += scs.o
 obj-$(CONFIG_HAVE_STATIC_CALL_INLINE) += static_call.o
+obj-$(CONFIG_CFI_CLANG) += cfi.o
 
 obj-$(CONFIG_PERF_EVENTS) += events/
 
@@ -129,6 +133,38 @@ obj-$(CONFIG_GCC_PLUGIN_STACKLEAK) += stackleak.o
 KASAN_SANITIZE_stackleak.o := n
 KCSAN_SANITIZE_stackleak.o := n
 KCOV_INSTRUMENT_stackleak.o := n
+
+#ifdef OPLUS_FEATURE_PERFORMANCE_SCHED
+obj-$(CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED) += oplus_cpu/sched/
+#endif /* OPLUS_FEATURE_PERFORMANCE_SCHED */
+
+#ifdef OPLUS_FEATURE_SENSOR_SMEM
+obj-$(CONFIG_HORAE_THERMAL_SHELL) += oplus_cpu/thermal/
+#endif /* OPLUS_FEATURE_SENSOR_SMEM */
+
+#ifdef OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING
+obj-$(CONFIG_OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING) += oplus_cpu/cpufreq_bouncing/
+#endif /* OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING */
+
+#ifdef OPLUS_FEATURE_OMRG
+obj-$(CONFIG_OPLUS_OMRG) += oplus_cpu/oplus_omrg/
+#endif /* OPLUS_FEATURE_OMRG */
+
+#ifdef OPLUS_FEATURE_FREQQOS_MONITOR
+obj-$(CONFIG_OPLUS_FEATURE_FREQQOS_MONITOR) += oplus_cpu/freqqos_monitor/
+#endif /* OPLUS_FEATURE_FREQQOS_MONITOR */
+
+#ifdef OPLUS_FEATURE_WAKER_IDENTIFY
+obj-$(CONFIG_OPLUS_FEATURE_WAKER_IDENTIFY) += oplus_cpu/waker_identify/
+#endif OPLUS_FEATURE_WAKER_IDENTIFY
+
+#ifdef OPLUS_FEATURE_ABNORMAL_FLAG
+obj-$(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG) += oplus_cpu/oplus_overload/
+#endif
+
+#ifdef CONFIG_OPLUS_SCHED_TUNE
+obj-$(CONFIG_OPLUS_SCHED_TUNE) += oplus_cpu/sched/sched_tune/
+#endif /* CONFIG_OPLUS_SCHED_TUNE */
 
 obj-$(CONFIG_SCF_TORTURE_TEST) += scftorture.o
 

@@ -34,6 +34,7 @@
 #include <linux/compat.h>
 
 #include "internal.h"
+#include <trace/hooks/syscall_check.h>
 
 int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
 	struct file *filp)
@@ -492,7 +493,7 @@ retry:
 	if (error)
 		goto out;
 
-	error = path_permission(&path, MAY_EXEC | MAY_CHDIR);
+	error = inode_permission(path.dentry->d_inode, MAY_EXEC | MAY_CHDIR);
 	if (error)
 		goto dput_and_out;
 
@@ -521,7 +522,7 @@ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
 	if (!d_can_lookup(f.file->f_path.dentry))
 		goto out_putf;
 
-	error = file_permission(f.file, MAY_EXEC | MAY_CHDIR);
+	error = inode_permission(file_inode(f.file), MAY_EXEC | MAY_CHDIR);
 	if (!error)
 		set_fs_pwd(current->fs, &f.file->f_path);
 out_putf:
@@ -540,7 +541,7 @@ retry:
 	if (error)
 		goto out;
 
-	error = path_permission(&path, MAY_EXEC | MAY_CHDIR);
+	error = inode_permission(path.dentry->d_inode, MAY_EXEC | MAY_CHDIR);
 	if (error)
 		goto dput_and_out;
 
@@ -760,6 +761,18 @@ SYSCALL_DEFINE3(fchown, unsigned int, fd, uid_t, user, gid_t, group)
 	return ksys_fchown(fd, user, group);
 }
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+extern bool shmem_mapping(struct address_space *mapping);
+static inline bool shmem_file_dup(struct file *file)
+{
+	if (!IS_ENABLED(CONFIG_SHMEM))
+		return false;
+	if (!file || !file->f_mapping)
+		return false;
+	return shmem_mapping(file->f_mapping);
+}
+#endif
+
 static int do_dentry_open(struct file *f,
 			  struct inode *inode,
 			  int (*open)(struct inode *, struct file *))
@@ -800,6 +813,7 @@ static int do_dentry_open(struct file *f,
 		error = -ENODEV;
 		goto cleanup_all;
 	}
+	trace_android_vh_check_file_open(f);
 
 	error = security_file_open(f);
 	if (error)
@@ -843,8 +857,75 @@ static int do_dentry_open(struct file *f,
 	 * XXX: Huge page cache doesn't support writing yet. Drop all page
 	 * cache for this file before processing writes.
 	 */
-	if ((f->f_mode & FMODE_WRITE) && filemap_nr_thps(inode->i_mapping))
-		truncate_pagecache(inode, 0);
+	if (f->f_mode & FMODE_WRITE) {
+		/*
+		 * Paired with smp_mb() in collapse_file() to ensure nr_thps
+		 * is up to date and the update to i_writecount by
+		 * get_write_access() is visible. Ensures subsequent insertion
+		 * of THPs into the page cache will fail.
+		 */
+		smp_mb();
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		CHP_BUG_ON(inode->i_sb->s_magic == EROFS_SUPER_MAGIC_V1 && inode->may_cont_pte);
+#endif
+		if (filemap_nr_thps(inode->i_mapping))
+			truncate_pagecache(inode, 0);
+	} else {
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		bool fs_supported = handle_chp_fs_supported(inode);
+
+		if (!fs_supported)
+			return 0;
+
+		if (!S_ISREG(inode->i_mode))
+			return 0;
+		if (shmem_file_dup(f))
+			return 0;
+		if (inode->i_size < HPAGE_CONT_PTE_SIZE)
+			return 0;
+
+		inode_lock(inode);
+		if (!inode->may_cont_pte) {
+			int hugepage = 0;
+			const char *suffix;
+
+			/* executable files can be hugepages */
+			if (execute_ok(inode)) {
+				hugepage = NORMAL_HUGE;
+				goto done;
+			}
+
+			if (!f->f_path.dentry)
+				goto done;
+			suffix = strrchr(f->f_path.dentry->d_name.name, '.');
+			if (!suffix)
+				goto done;
+
+			if (!strcmp(suffix, ".so") || !strcmp(suffix, ".odex") ||
+			    !strcmp(suffix, ".ttf") || !strcmp(suffix, ".ttc") ||
+			    !strcmp(suffix, ".otf") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "OplusLauncher.apk") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "OplusExSystemService.apk") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "SystemUI.apk") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "framework-res.apk") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "oplus-framework-res.apk") ||
+			    !strcmp(f->f_path.dentry->d_name.name, "OplusAppPlatform.apk") ||
+			    (supported_oat_hugepage && !strcmp(f->f_path.dentry->d_name.name, "boot-framework.oat"))) {
+				hugepage = NORMAL_HUGE;
+				goto done;
+			}
+			if (!strcmp(suffix, ".jar"))
+				hugepage = JAR_HUGE;
+done:
+			if (hugepage) {
+				init_cont_endio_spinlock(inode);
+				smp_wmb();
+				inode->may_cont_pte = hugepage;
+			}
+		}
+		inode_unlock(inode);
+#endif
+	}
 
 	return 0;
 
@@ -953,47 +1034,6 @@ struct file *dentry_open(const struct path *path, int flags,
 	return f;
 }
 EXPORT_SYMBOL(dentry_open);
-
-/**
- * dentry_create - Create and open a file
- * @path: path to create
- * @flags: O_ flags
- * @mode: mode bits for new file
- * @cred: credentials to use
- *
- * Caller must hold the parent directory's lock, and have prepared
- * a negative dentry, placed in @path->dentry, for the new file.
- *
- * Caller sets @path->mnt to the vfsmount of the filesystem where
- * the new file is to be created. The parent directory and the
- * negative dentry must reside on the same filesystem instance.
- *
- * On success, returns a "struct file *". Otherwise a ERR_PTR
- * is returned.
- */
-struct file *dentry_create(const struct path *path, int flags, umode_t mode,
-			   const struct cred *cred)
-{
-	struct file *f;
-	int error;
-
-	validate_creds(cred);
-	f = alloc_empty_file(flags, cred);
-	if (IS_ERR(f))
-		return f;
-
-	error = vfs_create(d_inode(path->dentry->d_parent),
-			   path->dentry, mode, true);
-	if (!error)
-		error = vfs_open(path, f);
-
-	if (unlikely(error)) {
-		fput(f);
-		return ERR_PTR(error);
-	}
-	return f;
-}
-EXPORT_SYMBOL(dentry_create);
 
 struct file *open_with_fake_path(const struct path *path, int flags,
 				struct inode *inode, const struct cred *cred)
@@ -1187,14 +1227,34 @@ struct file *filp_open(const char *filename, int flags, umode_t mode)
 {
 	struct filename *name = getname_kernel(filename);
 	struct file *file = ERR_CAST(name);
-	
+
 	if (!IS_ERR(name)) {
 		file = file_open_name(name, flags, mode);
 		putname(name);
 	}
 	return file;
 }
-EXPORT_SYMBOL(filp_open);
+EXPORT_SYMBOL_NS(filp_open, ANDROID_GKI_VFS_EXPORT_ONLY);
+
+/* ANDROID: Allow drivers to open only block files from kernel mode */
+struct file *filp_open_block(const char *filename, int flags, umode_t mode)
+{
+	struct file *file;
+
+	file = filp_open(filename, flags, mode);
+	if (IS_ERR(file))
+		goto err_out;
+
+	/* Drivers should only be allowed to open block devices */
+	if (!S_ISBLK(file->f_mapping->host->i_mode)) {
+		filp_close(file, NULL);
+		file = ERR_PTR(-ENOTBLK);
+	}
+
+err_out:
+	return file;
+}
+EXPORT_SYMBOL_GPL(filp_open_block);
 
 struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 			    const char *filename, int flags, umode_t mode)
@@ -1353,7 +1413,7 @@ EXPORT_SYMBOL(filp_close);
  */
 SYSCALL_DEFINE1(close, unsigned int, fd)
 {
-	int retval = close_fd(fd);
+	int retval = __close_fd(current->files, fd);
 
 	/* can't restart close syscall because file table entry was cleared */
 	if (unlikely(retval == -ERESTARTSYS ||
@@ -1408,7 +1468,7 @@ int generic_file_open(struct inode * inode, struct file * filp)
 	return 0;
 }
 
-EXPORT_SYMBOL(generic_file_open);
+EXPORT_SYMBOL_NS(generic_file_open, ANDROID_GKI_VFS_EXPORT_ONLY);
 
 /*
  * This is used by subsystems that don't want seekable

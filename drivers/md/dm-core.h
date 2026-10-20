@@ -13,6 +13,7 @@
 #include <linux/ktime.h>
 #include <linux/genhd.h>
 #include <linux/blk-mq.h>
+#include <linux/keyslot-manager.h>
 
 #include <trace/events/block.h>
 
@@ -98,11 +99,6 @@ struct mapped_device {
 	 */
 	struct workqueue_struct *wq;
 
-	/*
-	 * freeze/thaw support require holding onto a super block
-	 */
-	struct super_block *frozen_sb;
-
 	/* forced geometry settings */
 	struct hd_geometry geometry;
 
@@ -127,6 +123,9 @@ struct mapped_device {
 void disable_discard(struct mapped_device *md);
 void disable_write_same(struct mapped_device *md);
 void disable_write_zeroes(struct mapped_device *md);
+#ifdef CONFIG_DEVICE_XCOPY
+void disable_device_copy(struct mapped_device *md);
+#endif
 
 static inline sector_t dm_get_size(struct mapped_device *md)
 {
@@ -175,6 +174,10 @@ struct dm_table {
 	void *event_context;
 
 	struct dm_md_mempools *mempools;
+
+#ifdef CONFIG_BLK_INLINE_ENCRYPTION
+	struct blk_keyslot_manager *ksm;
+#endif
 };
 
 static inline struct completion *dm_get_completion_from_kobject(struct kobject *kobj)

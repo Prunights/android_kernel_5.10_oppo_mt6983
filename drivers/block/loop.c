@@ -89,6 +89,8 @@ static DEFINE_MUTEX(loop_ctl_mutex);
 static int max_part;
 static int part_shift;
 
+extern void set_kworker_light(struct task_struct *task);
+
 static int transfer_xor(struct loop_device *lo, int cmd,
 			struct page *raw_page, unsigned raw_off,
 			struct page *loop_page, unsigned loop_off,
@@ -238,8 +240,12 @@ static void __loop_update_dio(struct loop_device *lo, bool dio)
  */
 static void loop_set_size(struct loop_device *lo, loff_t size)
 {
-	if (!set_capacity_and_notify(lo->lo_disk, size))
-		kobject_uevent(&disk_to_dev(lo->lo_disk)->kobj, KOBJ_CHANGE);
+	struct block_device *bdev = lo->lo_device;
+
+	bd_set_nr_sectors(bdev, size);
+
+	if (!set_capacity_revalidate_and_notify(lo->lo_disk, size, false))
+		kobject_uevent(&disk_to_dev(bdev->bd_disk)->kobj, KOBJ_CHANGE);
 }
 
 static inline int
@@ -929,6 +935,7 @@ static int loop_prepare_queue(struct loop_device *lo)
 	if (IS_ERR(lo->worker_task))
 		return -ENOMEM;
 	set_user_nice(lo->worker_task, MIN_NICE);
+	set_kworker_light(lo->worker_task);
 	return 0;
 }
 
@@ -2106,7 +2113,7 @@ static int loop_add(struct loop_device **l, int i)
 	lo->tag_set.numa_node = NUMA_NO_NODE;
 	lo->tag_set.cmd_size = sizeof(struct loop_cmd);
 	lo->tag_set.flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_STACKING |
-		BLK_MQ_F_NO_SCHED;
+		BLK_MQ_F_NO_SCHED_BY_DEFAULT;
 	lo->tag_set.driver_data = lo;
 
 	err = blk_mq_alloc_tag_set(&lo->tag_set);

@@ -175,6 +175,22 @@ iomap_read_page_end_io(struct bio_vec *bvec, int error)
 	struct page *page = bvec->bv_page;
 	struct iomap_page *iop = to_iomap_page(page);
 
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+	if (PageCont(page)) {
+		/*NOTE: This scenario does not support PageCont!*/
+		CHP_BUG_ON(page_has_private(page));
+		if (unlikely(error)) {
+			ClearPageUptodate(page);
+			SetPageError(page);
+		}
+
+		if (!iop || atomic_sub_and_test(bvec->bv_len,
+		    &iop->read_bytes_pending))
+			set_cont_pte_uptodate_and_unlock(page);
+		return;
+	}
+#endif
+
 	if (unlikely(error)) {
 		ClearPageUptodate(page);
 		SetPageError(page);
@@ -1156,8 +1172,7 @@ iomap_ioend_try_merge(struct iomap_ioend *ioend, struct list_head *more_ioends,
 EXPORT_SYMBOL_GPL(iomap_ioend_try_merge);
 
 static int
-iomap_ioend_compare(void *priv, const struct list_head *a,
-		const struct list_head *b)
+iomap_ioend_compare(void *priv, struct list_head *a, struct list_head *b)
 {
 	struct iomap_ioend *ia = container_of(a, struct iomap_ioend, io_list);
 	struct iomap_ioend *ib = container_of(b, struct iomap_ioend, io_list);

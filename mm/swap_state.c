@@ -93,6 +93,7 @@ unsigned long total_swapcache_pages(void)
 	}
 	return ret;
 }
+EXPORT_SYMBOL_GPL(total_swapcache_pages);
 
 static atomic_t swapin_readahead_hits = ATOMIC_INIT(4);
 
@@ -148,6 +149,13 @@ int add_to_swap_cache(struct page *page, swp_entry_t entry,
 		xas_create_range(&xas);
 		if (xas_error(&xas))
 			goto unlock;
+
+#ifdef CONFIG_CONT_PTE_HUGEPAGE
+		if (nr > 1) {
+			CHP_BUG_ON(!is_thp_swap(swp_swap_info(entry)));
+			CHP_BUG_ON(!IS_ALIGNED(swp_offset(entry), HPAGE_CONT_PTE_NR));
+		}
+#endif
 		for (i = 0; i < nr; i++) {
 			VM_BUG_ON_PAGE(xas.xa_index != idx + i, page);
 			old = xas_load(&xas);
@@ -160,7 +168,9 @@ int add_to_swap_cache(struct page *page, swp_entry_t entry,
 			xas_store(&xas, page);
 			xas_next(&xas);
 		}
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 		address_space->nrexceptional -= nr_shadows;
+#endif
 		address_space->nrpages += nr;
 		__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, nr);
 		ADD_CACHE_INFO(add_total, nr);
@@ -199,8 +209,10 @@ void __delete_from_swap_cache(struct page *page,
 		xas_next(&xas);
 	}
 	ClearPageSwapCache(page);
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 	if (shadow)
 		address_space->nrexceptional += nr;
+#endif
 	address_space->nrpages -= nr;
 	__mod_node_page_state(page_pgdat(page), NR_FILE_PAGES, -nr);
 	ADD_CACHE_INFO(del_total, nr);
@@ -301,7 +313,9 @@ void clear_shadow_from_swap_cache(int type, unsigned long begin,
 			xas_store(&xas, NULL);
 			nr_shadows++;
 		}
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
 		address_space->nrexceptional -= nr_shadows;
+#endif
 		xa_unlock_irq(&address_space->i_pages);
 
 		/* search the next swapcache until we meet end */
@@ -644,7 +658,11 @@ static unsigned long swapin_nr_pages(unsigned long offset)
  * This has been extended to use the NUMA policies from the mm triggering
  * the readahead.
  *
- * Caller must hold read mmap_lock if vmf->vma is not NULL.
+ * Caller must hold down_read on the vma->vm_mm if vmf->vma is not NULL.
+ * This is needed to ensure the VMA will not be freed in our back. In the case
+ * of the speculative page fault handler, this cannot happen, even if we don't
+ * hold the mmap_sem. Callees are assumed to take care of reading VMA's fields
+ * using READ_ONCE() to read consistent values.
  */
 struct page *swap_cluster_readahead(swp_entry_t entry, gfp_t gfp_mask,
 				struct vm_fault *vmf)
@@ -741,10 +759,18 @@ static inline void swap_ra_clamp_pfn(struct vm_area_struct *vma,
 				     unsigned long *start,
 				     unsigned long *end)
 {
-	*start = max3(lpfn, PFN_DOWN(vma->vm_start),
+#ifndef CONFIG_CONT_PTE_HUGEPAGE
+	*start = max3(lpfn, PFN_DOWN(READ_ONCE(vma->vm_start)),
 		      PFN_DOWN(faddr & PMD_MASK));
-	*end = min3(rpfn, PFN_DOWN(vma->vm_end),
+	*end = min3(rpfn, PFN_DOWN(READ_ONCE(vma->vm_end)),
 		    PFN_DOWN((faddr & PMD_MASK) + PMD_SIZE));
+#else
+	/* make read-ahead aligned with CONT_PTE_SHIFT */
+	*start = max(PFN_DOWN(READ_ONCE(vma->vm_start)),
+		     PFN_DOWN(faddr & CONT_PTE_MASK));
+	*end = min(PFN_DOWN(READ_ONCE(vma->vm_end)),
+		   PFN_DOWN((faddr & CONT_PTE_MASK) + CONT_PTE_SIZE));
+#endif
 }
 
 static void swap_ra_info(struct vm_fault *vmf,

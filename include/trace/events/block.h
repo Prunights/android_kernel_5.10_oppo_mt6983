@@ -64,6 +64,7 @@ DEFINE_EVENT(block_buffer, block_dirty_buffer,
 
 /**
  * block_rq_requeue - place block IO request back on a queue
+ * @q: queue holding operation
  * @rq: block IO operation request
  *
  * The block operation request @rq is being placed back into queue
@@ -72,9 +73,9 @@ DEFINE_EVENT(block_buffer, block_dirty_buffer,
  */
 TRACE_EVENT(block_rq_requeue,
 
-	TP_PROTO(struct request *rq),
+	TP_PROTO(struct request_queue *q, struct request *rq),
 
-	TP_ARGS(rq),
+	TP_ARGS(q, rq),
 
 	TP_STRUCT__entry(
 		__field(  dev_t,	dev			)
@@ -144,11 +145,36 @@ TRACE_EVENT(block_rq_complete,
 		  __entry->nr_sector, __entry->error)
 );
 
+#ifdef CONFIG_DEVICE_XCOPY
+TRACE_EVENT(block_xcopy_dump,
+
+	TP_PROTO(sector_t start_sect, unsigned int src, unsigned int dst),
+
+	TP_ARGS(start_sect, src, dst),
+
+	TP_STRUCT__entry (
+		__field(  sector_t,	sector			)
+		__field(  unsigned int,	src			)
+		__field(  unsigned int, dst 		)
+	),
+
+	TP_fast_assign(
+		__entry->sector = start_sect;
+		__entry->src = src;
+		__entry->dst = dst;
+	),
+
+	TP_printk("partition start_secotr:%llu, src[0]:%u, dst[0]:%u",
+			  (unsigned long long)__entry->sector,
+			  __entry->src, __entry->dst)
+);
+#endif
+
 DECLARE_EVENT_CLASS(block_rq,
 
-	TP_PROTO(struct request *rq),
+	TP_PROTO(struct request_queue *q, struct request *rq),
 
-	TP_ARGS(rq),
+	TP_ARGS(q, rq),
 
 	TP_STRUCT__entry(
 		__field(  dev_t,	dev			)
@@ -180,6 +206,7 @@ DECLARE_EVENT_CLASS(block_rq,
 
 /**
  * block_rq_insert - insert block operation request into queue
+ * @q: target queue
  * @rq: block IO operation request
  *
  * Called immediately before block operation request @rq is inserted
@@ -189,13 +216,14 @@ DECLARE_EVENT_CLASS(block_rq,
  */
 DEFINE_EVENT(block_rq, block_rq_insert,
 
-	TP_PROTO(struct request *rq),
+	TP_PROTO(struct request_queue *q, struct request *rq),
 
-	TP_ARGS(rq)
+	TP_ARGS(q, rq)
 );
 
 /**
  * block_rq_issue - issue pending block IO request operation to device driver
+ * @q: queue holding operation
  * @rq: block IO operation operation request
  *
  * Called when block operation request @rq from queue @q is sent to a
@@ -203,13 +231,14 @@ DEFINE_EVENT(block_rq, block_rq_insert,
  */
 DEFINE_EVENT(block_rq, block_rq_issue,
 
-	TP_PROTO(struct request *rq),
+	TP_PROTO(struct request_queue *q, struct request *rq),
 
-	TP_ARGS(rq)
+	TP_ARGS(q, rq)
 );
 
 /**
  * block_rq_merge - merge request with another one in the elevator
+ * @q: queue holding operation
  * @rq: block IO operation operation request
  *
  * Called when block operation request @rq from queue @q is merged to another
@@ -217,9 +246,9 @@ DEFINE_EVENT(block_rq, block_rq_issue,
  */
 DEFINE_EVENT(block_rq, block_rq_merge,
 
-	TP_PROTO(struct request *rq),
+	TP_PROTO(struct request_queue *q, struct request *rq),
 
-	TP_ARGS(rq)
+	TP_ARGS(q, rq)
 );
 
 /**
@@ -601,6 +630,7 @@ TRACE_EVENT(block_bio_remap,
 
 /**
  * block_rq_remap - map request for a block operation request
+ * @q: queue holding the operation
  * @rq: block IO operation request
  * @dev: device for the operation
  * @from: original sector for the operation
@@ -611,9 +641,10 @@ TRACE_EVENT(block_bio_remap,
  */
 TRACE_EVENT(block_rq_remap,
 
-	TP_PROTO(struct request *rq, dev_t dev, sector_t from),
+	TP_PROTO(struct request_queue *q, struct request *rq, dev_t dev,
+		 sector_t from),
 
-	TP_ARGS(rq, dev, from),
+	TP_ARGS(q, rq, dev, from),
 
 	TP_STRUCT__entry(
 		__field( dev_t,		dev		)
@@ -642,6 +673,196 @@ TRACE_EVENT(block_rq_remap,
 		  MAJOR(__entry->old_dev), MINOR(__entry->old_dev),
 		  (unsigned long long)__entry->old_sector, __entry->nr_bios)
 );
+
+#if IS_ENABLED(CONFIG_MTK_BLOCK_IO_PM_DEBUG)
+
+#define show_rpm_status(status) __print_symbolic(status,		\
+		{ RPM_ACTIVE,		"RPM_ACTIVE"},			\
+		{ RPM_RESUMING,		"RPM_RESUMING"},		\
+		{ RPM_SUSPENDED,	"RPM_SUSPENDED"},		\
+		{ RPM_SUSPENDING,	"RPM_SUSPENDING"})
+
+DECLARE_EVENT_CLASS(blk_pm_ret,
+
+	TP_PROTO(struct request_queue *q, int ret),
+
+	TP_ARGS(q, ret),
+
+	TP_STRUCT__entry(
+		__field(dev_t,		dev			)
+		__field(int,		rpm_status		)
+		__field(int,		pm_only			)
+		__field(int,		mq_freeze_depth		)
+		__field(int,		dying			)
+		__field(int,		ret			)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= q->dev->devt;
+		__entry->rpm_status	= q->rpm_status;
+		__entry->pm_only	= blk_queue_pm_only(q);
+		__entry->mq_freeze_depth = q->mq_freeze_depth;
+		__entry->dying		= blk_queue_dying(q);
+		__entry->ret		= ret;
+	),
+
+	TP_printk("dev=%d,%d rpm_status=%s pm_only=%d mq_freeze_depth=%d dying=%d ret=%d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
+		  show_rpm_status(__entry->rpm_status),
+		  __entry->pm_only,
+		  __entry->mq_freeze_depth,
+		  __entry->dying,
+		  __entry->ret)
+);
+
+DECLARE_EVENT_CLASS(blk_pm_err,
+
+	TP_PROTO(struct request_queue *q, int err),
+
+	TP_ARGS(q, err),
+
+	TP_STRUCT__entry(
+		__field(dev_t,		dev			)
+		__field(int,		rpm_status		)
+		__field(int,		pm_only			)
+		__field(int,		mq_freeze_depth		)
+		__field(int,		dying			)
+		__field(int,		err			)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= q->dev->devt;
+		__entry->rpm_status	= q->rpm_status;
+		__entry->pm_only	= blk_queue_pm_only(q);
+		__entry->mq_freeze_depth = q->mq_freeze_depth;
+		__entry->dying		= blk_queue_dying(q);
+		__entry->err		= err;
+	),
+
+	TP_printk("dev=%d,%d rpm_status=%s pm_only=%d mq_freeze_depth=%d dying=%d err=%d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
+		  show_rpm_status(__entry->rpm_status),
+		  __entry->pm_only,
+		  __entry->mq_freeze_depth,
+		  __entry->dying,
+		  __entry->err)
+);
+
+DECLARE_EVENT_CLASS(blk_pm,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q),
+
+	TP_STRUCT__entry(
+		__field(dev_t,		dev			)
+		__field(int,		rpm_status		)
+		__field(int,		pm_only			)
+		__field(int,		mq_freeze_depth		)
+		__field(int,		dying			)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= q->dev->devt;
+		__entry->rpm_status	= q->rpm_status;
+		__entry->pm_only	= blk_queue_pm_only(q);
+		__entry->mq_freeze_depth = q->mq_freeze_depth;
+		__entry->dying		= blk_queue_dying(q);
+	),
+
+	TP_printk("dev=%d,%d rpm_status=%s pm_only=%d mq_freeze_depth=%d dying=%d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
+		  show_rpm_status(__entry->rpm_status),
+		  __entry->pm_only,
+		  __entry->mq_freeze_depth,
+		  __entry->dying)
+);
+
+DEFINE_EVENT(blk_pm, blk_pre_runtime_suspend_start,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm_ret, blk_pre_runtime_suspend_end,
+
+	TP_PROTO(struct request_queue *q, int ret),
+
+	TP_ARGS(q, ret)
+);
+
+DEFINE_EVENT(blk_pm_err, blk_post_runtime_suspend_start,
+
+	TP_PROTO(struct request_queue *q, int err),
+
+	TP_ARGS(q, err)
+);
+
+DEFINE_EVENT(blk_pm_err, blk_post_runtime_suspend_end,
+
+	TP_PROTO(struct request_queue *q, int err),
+
+	TP_ARGS(q, err)
+);
+
+DEFINE_EVENT(blk_pm, blk_pre_runtime_resume_start,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_pre_runtime_resume_end,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_post_runtime_resume_start,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_post_runtime_resume_end,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_set_runtime_active_start,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_set_runtime_active_end,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_queue_enter_sleep,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+DEFINE_EVENT(blk_pm, blk_queue_enter_wakeup,
+
+	TP_PROTO(struct request_queue *q),
+
+	TP_ARGS(q)
+);
+
+#endif /* CONFIG_MTK_BLOCK_IO_PM_DEBUG */
 
 #endif /* _TRACE_BLOCK_H */
 

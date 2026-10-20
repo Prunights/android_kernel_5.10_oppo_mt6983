@@ -310,11 +310,9 @@ static void scsi_dec_host_busy(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 	rcu_read_lock();
 	__clear_bit(SCMD_STATE_INFLIGHT, &cmd->state);
 	if (unlikely(scsi_host_in_recovery(shost))) {
-		unsigned int busy = scsi_host_busy(shost);
-
 		spin_lock_irqsave(shost->host_lock, flags);
 		if (shost->host_failed || shost->host_eh_scheduled)
-			scsi_eh_wakeup(shost, busy);
+			scsi_eh_wakeup(shost);
 		spin_unlock_irqrestore(shost->host_lock, flags);
 	}
 	rcu_read_unlock();
@@ -1428,7 +1426,7 @@ static bool scsi_mq_lld_busy(struct request_queue *q)
 static void scsi_softirq_done(struct request *rq)
 {
 	struct scsi_cmnd *cmd = blk_mq_rq_to_pdu(rq);
-	enum scsi_disposition disposition;
+	int disposition;
 
 	INIT_LIST_HEAD(&cmd->eh_entry);
 
@@ -1562,6 +1560,10 @@ static blk_status_t scsi_prepare_cmd(struct request *req)
 	cmd->prot_op = SCSI_PROT_NORMAL;
 	if (blk_rq_bytes(req))
 		cmd->sc_data_direction = rq_dma_dir(req);
+#ifdef CONFIG_DEVICE_XCOPY
+	else if (op_is_copy(req_op(req)))
+		cmd->sc_data_direction = DMA_TO_DEVICE;
+#endif
 	else
 		cmd->sc_data_direction = DMA_NONE;
 
@@ -1923,13 +1925,9 @@ int scsi_mq_setup_tags(struct Scsi_Host *shost)
 	return blk_mq_alloc_tag_set(tag_set);
 }
 
-void scsi_mq_free_tags(struct kref *kref)
+void scsi_mq_destroy_tags(struct Scsi_Host *shost)
 {
-	struct Scsi_Host *shost = container_of(kref, typeof(*shost),
-					       tagset_refcnt);
-
 	blk_mq_free_tag_set(&shost->tag_set);
-	complete(&shost->tagset_freed);
 }
 
 /**
@@ -2387,6 +2385,9 @@ static void scsi_evt_emit(struct scsi_device *sdev, struct scsi_event *evt)
 		break;
 	case SDEV_EVT_POWER_ON_RESET_OCCURRED:
 		envp[idx++] = "SDEV_UA=POWER_ON_RESET_OCCURRED";
+		#if IS_ENABLED(CONFIG_MTK_FIX_SCSI_THREAD_RACING_UPDATE)
+		wait_event(sdev->host->host_wait, sdev->sdev_gendev.kobj.parent != NULL);
+		#endif
 		break;
 	default:
 		/* do nothing */

@@ -364,9 +364,10 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		 * _very_ unlikely case that the pipe was full, but we got
 		 * no data.
 		 */
-		if (unlikely(was_full))
+		if (unlikely(was_full)) {
 			wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
-		kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
+			kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
+		}
 
 		/*
 		 * But because we didn't read anything, at this point we can
@@ -385,11 +386,12 @@ pipe_read(struct kiocb *iocb, struct iov_iter *to)
 		wake_next_reader = false;
 	__pipe_unlock(pipe);
 
-	if (was_full)
+	if (was_full) {
 		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
+		kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
+	}
 	if (wake_next_reader)
 		wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
-	kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
 	if (ret > 0)
 		file_accessed(filp);
 	return ret;
@@ -441,6 +443,9 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 	}
 
 	/*
+	 * Epoll nonsensically wants a wakeup whether the pipe
+	 * was already empty or not.
+	 *
 	 * If it wasn't empty we try to merge new data into
 	 * the last buffer.
 	 *
@@ -449,9 +454,9 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 	 * spanning multiple pages.
 	 */
 	head = pipe->head;
-	was_empty = pipe_empty(head, pipe->tail);
+	was_empty = true;
 	chars = total_len & (PAGE_SIZE-1);
-	if (chars && !was_empty) {
+	if (chars && !pipe_empty(head, pipe->tail)) {
 		unsigned int mask = pipe->ring_size - 1;
 		struct pipe_buffer *buf = &pipe->bufs[(head - 1) & mask];
 		int offset = buf->offset + buf->len;
@@ -562,9 +567,10 @@ pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		 * become empty while we dropped the lock.
 		 */
 		__pipe_unlock(pipe);
-		if (was_empty)
+		if (was_empty) {
 			wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
-		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
+			kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
+		}
 		wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
 		__pipe_lock(pipe);
 		was_empty = pipe_empty(pipe->head, pipe->tail);
@@ -583,13 +589,11 @@ out:
 	 * This is particularly important for small writes, because of
 	 * how (for example) the GNU make jobserver uses small writes to
 	 * wake up pending jobs
-	 *
-	 * Epoll nonsensically wants a wakeup whether the pipe
-	 * was already empty or not.
 	 */
-	if (was_empty || pipe->poll_usage)
+	if (was_empty) {
 		wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
-	kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
+		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
+	}
 	if (wake_next_writer)
 		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
 	if (ret > 0 && sb_start_write_trylock(file_inode(filp)->i_sb)) {
@@ -648,9 +652,6 @@ pipe_poll(struct file *filp, poll_table *wait)
 	__poll_t mask;
 	struct pipe_inode_info *pipe = filp->private_data;
 	unsigned int head, tail;
-
-	/* Epoll has some historical nasty semantics, this enables them */
-	WRITE_ONCE(pipe->poll_usage, true);
 
 	/*
 	 * Reading pipe state only -- no need for acquiring the semaphore.
@@ -1312,6 +1313,57 @@ int pipe_resize_ring(struct pipe_inode_info *pipe, unsigned int nr_slots)
 	return 0;
 }
 
+#ifdef OPLUS_BUG_STABILITY
+static inline bool is_zygote_process(struct task_struct *t)
+{
+	const struct cred *tcred = __task_cred(t);
+
+	struct task_struct * first_child = NULL;
+	if(t->children.next && t->children.next != (struct list_head*)&t->children.next)
+		first_child = container_of(t->children.next, struct task_struct, sibling);
+	if(!strcmp(t->comm, "main") && (tcred->uid.val == 0) && (t->parent != 0 && !strcmp(t->parent->comm,"init"))  )
+		return true;
+	else
+		return false;
+	return false;
+}
+#define SYSTEM_APP_UID 1000
+static inline bool is_system_uid(struct task_struct *t)
+{
+	int cur_uid;
+	cur_uid = task_uid(t).val;
+	if (cur_uid ==  SYSTEM_APP_UID)
+		return true;
+
+	return false;
+}
+
+static inline bool is_system_process(struct task_struct *t)
+{
+        pr_err("in system_process, t->comm is %s,grouplead command is %s",t->comm,t->group_leader->comm);
+	if (is_system_uid(t)) {
+		if (t->group_leader  && (!strncmp(t->group_leader->comm,"system_server", 13) ||
+			!strncmp(t->group_leader->comm, "surfaceflinger", 14) ||
+			!strncmp(t->group_leader->comm, "Binder:", 7) ||
+			!strncmp(t->group_leader->comm, "sensor", 6) ||
+			!strncmp(t->group_leader->comm, "suspend", 7) ||
+			!strncmp(t->group_leader->comm, "composer", 8)))
+				return true;
+	}
+	return false;
+}
+
+static inline bool is_critial_process(struct task_struct *t)
+{
+	if( is_zygote_process(t) || is_system_process(t)) {
+                pr_err("in pipe set buffer size, critical svc, we are not gonna return EPERM");
+		return true;
+        }
+
+	return false;
+}
+#endif /* OPLUS_BUG_STABILITY */
+
 /*
  * Allocate a new array of pipe buffers and copy the info over. Returns the
  * pipe size if successful, or return -ERROR on error.
@@ -1338,16 +1390,28 @@ static long pipe_set_size(struct pipe_inode_info *pipe, unsigned long arg)
 	 * Decreasing the pipe capacity is always permitted, even
 	 * if the user is currently over a limit.
 	 */
+#ifndef OPLUS_BUG_STABILITY
 	if (nr_slots > pipe->max_usage &&
 			size > pipe_max_size && !capable(CAP_SYS_RESOURCE))
+#else /* OPLUS_BUG_STABILITY */
+	if (nr_slots > pipe->max_usage &&
+			size > pipe_max_size && !capable(CAP_SYS_RESOURCE) && !is_critial_process(current))
+#endif /* OPLUS_BUG_STABILITY */
 		return -EPERM;
 
 	user_bufs = account_pipe_buffers(pipe->user, pipe->nr_accounted, nr_slots);
 
+#ifndef OPLUS_BUG_STABILITY
 	if (nr_slots > pipe->max_usage &&
 			(too_many_pipe_buffers_hard(user_bufs) ||
 			 too_many_pipe_buffers_soft(user_bufs)) &&
 			pipe_is_unprivileged_user()) {
+#else /* OPLUS_BUG_STABILITY */
+	if (nr_slots > pipe->max_usage &&
+			(too_many_pipe_buffers_hard(user_bufs) ||
+			 too_many_pipe_buffers_soft(user_bufs)) &&
+			pipe_is_unprivileged_user() && !is_critial_process(current)) {
+#endif /* OPLUS_BUG_STABILITY */
 		ret = -EPERM;
 		goto out_revert_acct;
 	}

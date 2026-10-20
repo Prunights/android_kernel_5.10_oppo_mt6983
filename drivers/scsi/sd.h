@@ -49,6 +49,9 @@ enum {
 	SD_MAX_XFER_BLOCKS = 0xffffffff,
 	SD_MAX_WS10_BLOCKS = 0xffff,
 	SD_MAX_WS16_BLOCKS = 0x7fffff,
+#ifdef CONFIG_SCSI_BATCH_UNMAP
+	SD_MAX_UNMAP_DESCS = 0xffff,
+#endif
 };
 
 enum {
@@ -95,6 +98,9 @@ struct scsi_disk {
 	u32		opt_xfer_blocks;
 	u32		max_ws_blocks;
 	u32		max_unmap_blocks;
+#ifdef CONFIG_SCSI_BATCH_UNMAP
+	u32		max_unmap_descriptors;
+#endif
 	u32		unmap_granularity;
 	u32		unmap_alignment;
 	u32		index;
@@ -125,6 +131,9 @@ struct scsi_disk {
 	unsigned	urswrz : 1;
 	unsigned	security : 1;
 	unsigned	ignore_medium_access_errors : 1;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 #define to_scsi_disk(obj) container_of(obj,struct scsi_disk,dev)
 
