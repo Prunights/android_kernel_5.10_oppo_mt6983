@@ -69,12 +69,19 @@ jobs:
           done
           python3 - <<'PY'
           import os
+          def norm(block):
+              out=[]
+              for l in block:
+                  s=' '.join(l.split())
+                  if s:
+                      out.append(s)
+              return out
           files=[l.strip() for l in open('left.txt') if l.strip()]
           tot_auto=tot_manual=0
-          still=[]
+          still=[]; detail=[]
           for p in files:
               if not os.path.isfile(p):
-                  still.append(p); continue
+                  still.append(p); detail.append((p,'缺文件',0,0)); continue
               data=open(p,encoding='utf-8',errors='surrogateescape').read()
               lines=data.split('\n')
               out=[]; i=0; auto=0; manual=0
@@ -91,9 +98,10 @@ jobs:
                       while i<len(lines) and not lines[i].startswith('>>>>>>> '):
                           theirs.append(lines[i]); i+=1
                       i+=1
-                      if ours==base:
+                      no, nb, nt = norm(ours), norm(base), norm(theirs)
+                      if no==nb:
                           out.extend(theirs); auto+=1
-                      elif theirs==base:
+                      elif nt==nb:
                           out.extend(ours); auto+=1
                       else:
                           out.append('<<<<<<< ours'); out.extend(ours)
@@ -106,10 +114,15 @@ jobs:
               if auto:
                   open(p,'w',encoding='utf-8',errors='surrogateescape').write('\n'.join(out))
               tot_auto+=auto; tot_manual+=manual
+              detail.append((p,'OK' if manual==0 else f'{manual}段',auto,manual))
               if manual:
                   still.append(p)
           open('still.txt','w').write('\n'.join(still)+('\n' if still else ''))
-          print(f'自动解决冲突段: {tot_auto}  仍需人工: {tot_manual} 段, 涉及 {len(still)} 个文件')
+          with open('auto.txt','w') as fh:
+              fh.write(f'自动解决段数 {tot_auto} | 仍需人工 {tot_manual} 段 | 文件 {len(still)}\n')
+              for p,st,a,m in detail:
+                  fh.write(f'{st:>8}\t自动{a}\t人工{m}\t{p}\n')
+          print(f'自动解决 {tot_auto} 段, 仍需人工 {tot_manual} 段, 涉及 {len(still)} 文件')
           PY
           # 自动解决完且无残留标记的文件标记为已解决
           while IFS= read -r f; do
