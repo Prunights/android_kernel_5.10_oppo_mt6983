@@ -2,6 +2,7 @@
 #ifndef _LINUX_FS_H
 #define _LINUX_FS_H
 
+#include <linux/android_kabi.h>
 #include <linux/linkage.h>
 #include <linux/wait_bit.h>
 #include <linux/kdev_t.h>
@@ -726,6 +727,9 @@ struct inode {
 #endif
 
 	void			*i_private; /* fs or device private pointer */
+	/* OPPO/MTK vendor: may_cont_pte 与 mm 相关特性借用 KABI 保留位 */
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 } __randomize_layout;
 
 struct timespec64 timestamp_truncate(struct timespec64 t, struct inode *inode);
