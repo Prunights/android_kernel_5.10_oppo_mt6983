@@ -1,0 +1,92 @@
+name: Merge Test LTS Base236
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'vendor branch'
+        required: true
+        default: 'n2f-272'
+      base_tag:
+        description: 'explicit merge base (clean upstream)'
+        required: true
+        default: 'v5.10.236'
+      upstream_tag:
+        description: 'upstream tag to merge'
+        required: true
+        default: 'v5.10.272'
+
+jobs:
+  merge:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - name: 检出 vendor 分支
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target }}
+
+      - name: 记录 vendor 树
+        id: vendor
+        run: |
+          T=$(git rev-parse HEAD^{tree})
+          echo "vendor_tree=$T" >> $GITHUB_OUTPUT
+          echo "vendor tree: $T"
+          echo "vendor HEAD: $(git log -1 --format='%h %s')"
+
+      - name: 拉上游
+        run: |
+          git remote add upstream https://github.com/gregkh/linux.git || true
+          git fetch --no-tags upstream "refs/tags/${{ inputs.base_tag }}:refs/tags/${{ inputs.base_tag }}" "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+          git log -1 --format='base %h %s' "${{ inputs.base_tag }}"
+          git log -1 --format='head %h %s' "${{ inputs.upstream_tag }}"
+          df -h / | tail -1
+
+      - name: 用干净 base 造 vendor 快照并合并
+        run: |
+          git config user.email ci@local
+          git config user.name ci
+          OPPO_TREE="${{ steps.vendor.outputs.vendor_tree }}"
+
+          git checkout -B lts-test "${{ inputs.base_tag }}"
+          git read-tree "$OPPO_TREE"
+          git commit -q -m "vendor snapshot (${{ inputs.target }}) on clean ${{ inputs.base_tag }}"
+
+          set +e
+          git merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
+          echo "merge 退出码: $?"
+          set -e
+          tail -6 merge.log || true
+
+          git diff --name-only --diff-filter=U | sort > conflicts.txt
+          N=$(wc -l < conflicts.txt)
+          echo "===== 冲突文件数: $N ====="
+          if grep -qiE 'fatal|error:' merge.log; then
+            echo "!!!!! 出现 fatal，结果无效 !!!!!"
+            grep -iE 'fatal|error:' merge.log | head -5
+            echo INVALID > merge_failed.marker
+          fi
+          echo "===== 按二级目录 Top15 ====="
+          awk -F/ '{if(NF>2) print $1"/"$2"/"$3; else print $0}' conflicts.txt | sort | uniq -c | sort -rn | head -15
+
+      - name: 发布到 ci-results-236
+        if: always()
+        run: |
+          mkdir -p /tmp/res
+          cp conflicts.txt /tmp/res/ 2>/dev/null || echo "(none)" > /tmp/res/conflicts.txt
+          cp merge.log /tmp/res/ 2>/dev/null || echo "(none)" > /tmp/res/merge.log
+          cp merge_failed.marker /tmp/res/ 2>/dev/null || true
+          cd /tmp/res
+          git init -q .
+          git config user.email ci@local
+          git config user.name ci
+          git add -A
+          git commit -q -m "merge test base236: $(date -u +%FT%TZ)" || true
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:ci-results-236
+
+      - name: 磁盘
+        if: always()
+        run: df -h / | tail -1
