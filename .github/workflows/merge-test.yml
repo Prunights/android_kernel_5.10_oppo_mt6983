@@ -1,0 +1,83 @@
+name: Merge Test LTS
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'base branch'
+        required: true
+        default: 'n2f-272'
+      upstream_tag:
+        description: 'upstream tag'
+        required: true
+        default: 'v5.10.272'
+
+jobs:
+  merge:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+    steps:
+      - name: 全量检出目标分支
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.target }}
+
+      - name: 记录基线
+        run: |
+          git log -1 --format='HEAD %h %s'
+          echo "磁盘:"; df -h / | tail -1
+
+      - name: 拉上游
+        run: |
+          git remote add upstream https://github.com/gregkh/linux.git || true
+          time git fetch --no-tags --filter=blob:none upstream "refs/tags/${{ inputs.upstream_tag }}:refs/tags/${{ inputs.upstream_tag }}"
+          git log -1 --format='上游 %h %s' "${{ inputs.upstream_tag }}"
+          echo "merge-base: $(git merge-base HEAD ${{ inputs.upstream_tag }})"
+          git log -1 --format='共同祖先 %h %ci %s' "$(git merge-base HEAD ${{ inputs.upstream_tag }})"
+
+      - name: 执行合并
+        id: merge
+        run: |
+          git config user.email ci@local
+          git config user.name ci
+          set +e
+          time git -c merge.conflictStyle=diff3 merge --no-commit --no-ff "${{ inputs.upstream_tag }}" > merge.log 2>&1
+          echo "merge 退出码: $?"
+          set -e
+          echo "----- merge.log 末尾 -----"
+          tail -20 merge.log || true
+
+          git diff --name-only --diff-filter=U | sort > conflicts.txt
+          N=$(wc -l < conflicts.txt)
+          echo "conflicts=$N" >> $GITHUB_OUTPUT
+          echo "===== 冲突文件数: $N ====="
+
+          echo "===== 按目录 Top20 ====="
+          awk -F/ '{if(NF>2) print $1"/"$2"/"$3; else print $0}' conflicts.txt | sort | uniq -c | sort -rn | head -20
+
+          echo "===== 分子系统统计 ====="
+          for d in net/ fs/ fs/f2fs/ mm/ kernel/ include/ drivers/ arch/arm64/ sound/ lib/ security/; do
+            t=$(grep -c "^$d" conflicts.txt || true)
+            printf "%-18s %s\n" "$d" "$t"
+          done
+
+          echo "===== 前 40 个冲突文件 ====="
+          head -40 conflicts.txt
+
+          echo "===== 未合并条目数(git ls-files -u) ====="
+          git ls-files -u | wc -l
+
+      - name: 上传冲突清单
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-conflicts
+          path: |
+            conflicts.txt
+            merge.log
+          retention-days: 7
+
+      - name: 磁盘收尾
+        if: always()
+        run: df -h / | tail -1
