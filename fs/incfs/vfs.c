@@ -180,8 +180,7 @@ const struct inode_operations incfs_file_inode_ops = {
 
 static int incfs_handler_getxattr(const struct xattr_handler *xh,
 				  struct dentry *d, struct inode *inode,
-				  const char *name, void *buffer, size_t size,
-				  int flags)
+				  const char *name, void *buffer, size_t size)
 {
 	return incfs_getxattr(d, name, buffer, size);
 }
@@ -1426,9 +1425,18 @@ static int dir_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto unlock_out;
 	}
 
-	error = vfs_rename(d_inode(backing_old_dir_dentry), backing_old_dentry,
-			d_inode(backing_new_dir_dentry), backing_new_dentry,
-			NULL, 0);
+	{
+		struct renamedata rd = {
+			.old_dir = d_inode(backing_old_dir_dentry),
+			.old_dentry = backing_old_dentry,
+			.new_dir = d_inode(backing_new_dir_dentry),
+			.new_dentry = backing_new_dentry,
+			.delegated_inode = NULL,
+			.flags = 0,
+		};
+
+		error = vfs_rename(&rd);
+	}
 	if (error)
 		goto unlock_out;
 	if (target_inode)
