@@ -722,30 +722,20 @@ static bool reqsk_queue_unlink(struct request_sock *req)
 		found = __sk_nulls_del_node_init_rcu(req_to_sk(req));
 		spin_unlock(lock);
 	}
-
+	if (timer_pending(&req->rsk_timer) && del_timer_sync(&req->rsk_timer))
+		reqsk_put(req);
 	return found;
 }
 
-static bool __inet_csk_reqsk_queue_drop(struct sock *sk,
-					struct request_sock *req,
-					bool from_timer)
+bool inet_csk_reqsk_queue_drop(struct sock *sk, struct request_sock *req)
 {
 	bool unlinked = reqsk_queue_unlink(req);
-
-	if (!from_timer && timer_delete_sync(&req->rsk_timer))
-		reqsk_put(req);
 
 	if (unlinked) {
 		reqsk_queue_removed(&inet_csk(sk)->icsk_accept_queue, req);
 		reqsk_put(req);
 	}
-
 	return unlinked;
-}
-
-bool inet_csk_reqsk_queue_drop(struct sock *sk, struct request_sock *req)
-{
-	return __inet_csk_reqsk_queue_drop(sk, req, false);
 }
 EXPORT_SYMBOL(inet_csk_reqsk_queue_drop);
 
@@ -768,8 +758,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 	if (inet_sk_state_load(sk_listener) != TCP_LISTEN)
 		goto drop;
 
-	max_syn_ack_retries = READ_ONCE(icsk->icsk_syn_retries) ? :
-		READ_ONCE(net->ipv4.sysctl_tcp_synack_retries);
+	max_syn_ack_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
 	/* Normally all the openreqs are young and become mature
 	 * (i.e. converted to established socket) for first timeout.
 	 * If synack was not acknowledged for 1 second, it means
@@ -814,8 +803,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 		return;
 	}
 drop:
-	__inet_csk_reqsk_queue_drop(sk_listener, req, true);
-	reqsk_put(req);
+	inet_csk_reqsk_queue_drop_and_put(sk_listener, req);
 }
 
 static void reqsk_queue_hash_req(struct request_sock *req,
@@ -869,7 +857,6 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	if (newsk) {
 		struct inet_connection_sock *newicsk = inet_csk(newsk);
 
-		newsk->sk_wait_pending = 0;
 		inet_sk_set_state(newsk, TCP_SYN_RECV);
 		newicsk->icsk_bind_hash = NULL;
 
@@ -927,20 +914,11 @@ void inet_csk_destroy_sock(struct sock *sk)
 
 	sk_refcnt_debug_release(sk);
 
-	this_cpu_dec(*sk->sk_prot->orphan_count);
+	percpu_counter_dec(sk->sk_prot->orphan_count);
 
 	sock_put(sk);
 }
 EXPORT_SYMBOL(inet_csk_destroy_sock);
-
-void inet_csk_prepare_for_destroy_sock(struct sock *sk)
-{
-	/* The below has to be done to allow calling inet_csk_destroy_sock */
-	if (sk->sk_protocol == IPPROTO_TCP)
-		tcp_clear_sock_ops_cb_flags(sk);
-	sock_set_flag(sk, SOCK_DEAD);
-	this_cpu_inc(*sk->sk_prot->orphan_count);
-}
 
 /* This function allows to force a closure of a socket after the call to
  * tcp/dccp_create_openreq_child().
@@ -1010,7 +988,7 @@ static void inet_child_forget(struct sock *sk, struct request_sock *req,
 
 	sock_orphan(child);
 
-	this_cpu_inc(*sk->sk_prot->orphan_count);
+	percpu_counter_inc(sk->sk_prot->orphan_count);
 
 	if (sk->sk_protocol == IPPROTO_TCP && tcp_rsk(req)->tfo_listener) {
 		BUG_ON(rcu_access_pointer(tcp_sk(child)->fastopen_rsk) != req);
