@@ -1616,6 +1616,7 @@ static void f2fs_put_super(struct super_block *sb)
 
 	destroy_device_list(sbi);
 	f2fs_destroy_page_array_cache(sbi);
+	f2fs_destroy_xattr_caches(sbi);
 	mempool_destroy(sbi->write_io_dummy);
 #ifdef CONFIG_QUOTA
 	for (i = 0; i < MAXQUOTAS; i++)
@@ -1696,32 +1697,26 @@ static int f2fs_statfs_project(struct super_block *sb,
 
 	limit = min_not_zero(dquot->dq_dqb.dqb_bsoftlimit,
 					dquot->dq_dqb.dqb_bhardlimit);
-	limit >>= sb->s_blocksize_bits;
+	if (limit)
+		limit >>= sb->s_blocksize_bits;
 
-	if (limit) {
-		uint64_t remaining = 0;
-
+	if (limit && buf->f_blocks > limit) {
 		curblock = (dquot->dq_dqb.dqb_curspace +
 			    dquot->dq_dqb.dqb_rsvspace) >> sb->s_blocksize_bits;
-		if (limit > curblock)
-			remaining = limit - curblock;
-
-		buf->f_blocks = min(buf->f_blocks, limit);
-		buf->f_bfree = min(buf->f_bfree, remaining);
-		buf->f_bavail = min(buf->f_bavail, remaining);
+		buf->f_blocks = limit;
+		buf->f_bfree = buf->f_bavail =
+			(buf->f_blocks > curblock) ?
+			 (buf->f_blocks - curblock) : 0;
 	}
 
 	limit = min_not_zero(dquot->dq_dqb.dqb_isoftlimit,
 					dquot->dq_dqb.dqb_ihardlimit);
 
-	if (limit) {
-		uint64_t remaining = 0;
-
-		if (limit > dquot->dq_dqb.dqb_curinodes)
-			remaining = limit - dquot->dq_dqb.dqb_curinodes;
-
-		buf->f_files = min(buf->f_files, limit);
-		buf->f_ffree = min(buf->f_ffree, remaining);
+	if (limit && buf->f_files > limit) {
+		buf->f_files = limit;
+		buf->f_ffree =
+			(buf->f_files > dquot->dq_dqb.dqb_curinodes) ?
+			 (buf->f_files - dquot->dq_dqb.dqb_curinodes) : 0;
 	}
 
 	spin_unlock(&dquot->dq_dqb_lock);
@@ -1776,9 +1771,9 @@ static int f2fs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_fsid    = u64_to_fsid(id);
 
 #ifdef CONFIG_QUOTA
-	if (is_inode_flag_set(d_inode(dentry), FI_PROJ_INHERIT) &&
+	if (is_inode_flag_set(dentry->d_inode, FI_PROJ_INHERIT) &&
 			sb_has_quota_limits_enabled(sb, PRJQUOTA)) {
-		f2fs_statfs_project(sb, F2FS_I(d_inode(dentry))->i_projid, buf);
+		f2fs_statfs_project(sb, F2FS_I(dentry->d_inode)->i_projid, buf);
 	}
 #endif
 	return 0;
@@ -2174,10 +2169,9 @@ restore_flag:
 	return err;
 }
 
-static int f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
+static void f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 {
 	int retry = DEFAULT_RETRY_IO_COUNT;
-	int ret;
 
 	/* we should flush all the data to keep data consistency */
 	do {
@@ -3418,7 +3412,6 @@ int f2fs_sanity_check_ckpt(struct f2fs_sb_info *sbi)
 	block_t user_block_count, valid_user_blocks;
 	block_t avail_node_count, valid_node_count;
 	unsigned int nat_blocks, nat_bits_bytes, nat_bits_blocks;
-	unsigned int sit_blk_cnt;
 	int i, j;
 
 	total = le32_to_cpu(raw_super->segment_count);
@@ -3527,13 +3520,6 @@ skip_cross:
 		nat_bitmap_size != ((nat_segs / 2) << log_blocks_per_seg) / 8) {
 		f2fs_err(sbi, "Wrong bitmap size: sit: %u, nat:%u",
 			 sit_bitmap_size, nat_bitmap_size);
-		return 1;
-	}
-
-	sit_blk_cnt = DIV_ROUND_UP(main_segs, SIT_ENTRY_PER_BLOCK);
-	if (sit_bitmap_size * 8 < sit_blk_cnt) {
-		f2fs_err(sbi, "Wrong bitmap size: sit: %u, sit_blk_cnt:%u",
-			 sit_bitmap_size, sit_blk_cnt);
 		return 1;
 	}
 
@@ -4148,9 +4134,13 @@ try_onemore:
 		}
 	}
 
-	err = f2fs_init_page_array_cache(sbi);
+	/* init per sbi slab cache */
+	err = f2fs_init_xattr_caches(sbi);
 	if (err)
 		goto free_io_dummy;
+	err = f2fs_init_page_array_cache(sbi);
+	if (err)
+		goto free_xattr_cache;
 
 	/* get an inode for meta space */
 	sbi->meta_inode = f2fs_iget(sb, F2FS_META_INO(sbi));
@@ -4352,15 +4342,11 @@ try_onemore:
 		}
 	} else {
 		err = f2fs_recover_fsync_data(sbi, true);
-		if (err > 0) {
-			if (!f2fs_readonly(sb)) {
-				f2fs_err(sbi, "Need to recover fsync data");
-				err = -EINVAL;
-				goto free_meta;
-			} else {
-				f2fs_info(sbi, "drop all fsynced data");
-				err = 0;
-			}
+
+		if (!f2fs_readonly(sb) && err > 0) {
+			err = -EINVAL;
+			f2fs_err(sbi, "Need to recover fsync data");
+			goto free_meta;
 		}
 	}
 
@@ -4380,12 +4366,13 @@ reset_checkpoint:
 	/* f2fs_recover_fsync_data() cleared this already */
 	clear_sbi_flag(sbi, SBI_POR_DOING);
 
-	if (test_opt(sbi, DISABLE_CHECKPOINT))
+	if (test_opt(sbi, DISABLE_CHECKPOINT)) {
 		err = f2fs_disable_checkpoint(sbi);
-	else if (is_set_ckpt_flags(sbi, CP_DISABLED_FLAG))
-		err = f2fs_enable_checkpoint(sbi);
-	if (err)
-		goto sync_free_meta;
+		if (err)
+			goto sync_free_meta;
+	} else if (is_set_ckpt_flags(sbi, CP_DISABLED_FLAG)) {
+		f2fs_enable_checkpoint(sbi);
+	}
 
 	/*
 	 * If filesystem is not mounted as read-only then
@@ -4469,6 +4456,8 @@ free_meta_inode:
 	sbi->meta_inode = NULL;
 free_page_array_cache:
 	f2fs_destroy_page_array_cache(sbi);
+free_xattr_cache:
+	f2fs_destroy_xattr_caches(sbi);
 free_io_dummy:
 	mempool_destroy(sbi->write_io_dummy);
 free_percpu:
