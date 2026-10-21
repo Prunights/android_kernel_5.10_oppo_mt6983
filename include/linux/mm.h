@@ -4201,5 +4201,10 @@ extern inline bool handle_chp_fs_supported(struct inode *inode);
 extern void handle_chp_load_elf_binary(const char *filename);
 #endif /* CONFIG_CONT_PTE_HUGEPAGE */
 
+static inline bool vma_is_shared_maywrite(struct vm_area_struct *vma)
+{
+	return is_shared_maywrite(vma->vm_flags);
+}
+
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */
