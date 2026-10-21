@@ -1582,6 +1582,9 @@ struct super_block {
 	 */
 	atomic_long_t s_fsnotify_connectors;
 
+	/* Pending fsnotify inode refs */
+	atomic_long_t s_fsnotify_inode_refs;
+
 	/* Being remounted read-only */
 	int s_readonly_remount;
 
