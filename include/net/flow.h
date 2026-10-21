@@ -29,6 +29,7 @@ struct flowi_tunnel {
 struct flowi_common {
 	int	flowic_oif;
 	int	flowic_iif;
+	int	flowic_l3mdev;
 	__u32	flowic_mark;
 	__u8	flowic_tos;
 	__u8	flowic_scope;
@@ -71,6 +72,7 @@ struct flowi4 {
 	struct flowi_common	__fl_common;
 #define flowi4_oif		__fl_common.flowic_oif
 #define flowi4_iif		__fl_common.flowic_iif
+#define flowi4_l3mdev		__fl_common.flowic_l3mdev
 #define flowi4_mark		__fl_common.flowic_mark
 #define flowi4_tos		__fl_common.flowic_tos
 #define flowi4_scope		__fl_common.flowic_scope
@@ -134,6 +136,7 @@ struct flowi6 {
 	struct flowi_common	__fl_common;
 #define flowi6_oif		__fl_common.flowic_oif
 #define flowi6_iif		__fl_common.flowic_iif
+#define flowi6_l3mdev		__fl_common.flowic_l3mdev
 #define flowi6_mark		__fl_common.flowic_mark
 #define flowi6_scope		__fl_common.flowic_scope
 #define flowi6_proto		__fl_common.flowic_proto
@@ -160,6 +163,7 @@ struct flowidn {
 	struct flowi_common	__fl_common;
 #define flowidn_oif		__fl_common.flowic_oif
 #define flowidn_iif		__fl_common.flowic_iif
+#define flowidn_l3mdev		__fl_common.flowic_l3mdev
 #define flowidn_mark		__fl_common.flowic_mark
 #define flowidn_scope		__fl_common.flowic_scope
 #define flowidn_proto		__fl_common.flowic_proto
@@ -180,6 +184,7 @@ struct flowi {
 	} u;
 #define flowi_oif	u.__fl_common.flowic_oif
 #define flowi_iif	u.__fl_common.flowic_iif
+#define flowi_l3mdev	u.__fl_common.flowic_l3mdev
 #define flowi_mark	u.__fl_common.flowic_mark
 #define flowi_tos	u.__fl_common.flowic_tos
 #define flowi_scope	u.__fl_common.flowic_scope
