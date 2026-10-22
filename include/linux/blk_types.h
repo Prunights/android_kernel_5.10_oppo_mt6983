@@ -388,6 +388,10 @@ enum req_opf {
 	REQ_OP_ZONE_RESET	= 17,
 	/* reset all the zone present on the device */
 	REQ_OP_ZONE_RESET_ALL	= 19,
+#ifdef CONFIG_DEVICE_XCOPY
+	/* device copy */
+	REQ_OP_DEVICE_COPY	= 20,
+#endif
 
 	/* SCSI passthrough using struct scsi_request */
 	REQ_OP_SCSI_IN		= 32,
