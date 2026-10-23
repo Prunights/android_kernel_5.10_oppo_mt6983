@@ -215,6 +215,9 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		unlock_page(page);
 		goto out;
 	}
+	if (kcompressd_store(page))
+		return 0;
+
 	if (frontswap_store(page) == 0) {
 		set_page_writeback(page);
 		unlock_page(page);
@@ -224,6 +227,97 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 	ret = __swap_writepage(page, wbc, end_swap_bio_write);
 out:
 	return ret;
+}
+
+
+/*
+ * do_swapout() - Write a page to swap space (kcompressd helper)
+ */
+static inline void do_swapout(struct page *page)
+{
+	struct writeback_control wbc = {
+		.sync_mode = WB_SYNC_NONE,
+		.nr_to_write = SWAP_CLUSTER_MAX,
+		.range_start = 0,
+		.range_end = LLONG_MAX,
+		.for_reclaim = 1,
+	};
+
+	if (frontswap_store(page) == 0) {
+		unlock_page(page);
+	} else
+		__swap_writepage(page, &wbc, end_swap_bio_write);
+
+	put_page(page);
+}
+
+/*
+ * kcompressd_store() - Off-load page compression to kcompressd
+ */
+static bool kcompressd_store(struct page *page)
+{
+	pg_data_t *pgdat = NODE_DATA(numa_node_id());
+	unsigned int ret;
+	int sysctl_kcompressd = vm_kcompressd;
+	struct page *head = NULL;
+
+	/* Only kswapd can use kcompressd */
+	if (!current_is_kswapd())
+		return false;
+
+	if (!sysctl_kcompressd || unlikely(!pgdat->kcompressd))
+		return false;
+
+	/* Only anon pages */
+	if (!PageAnon(page))
+		return false;
+
+	/* Swap device must be sync-efficient */
+	if (!swp_swap_info(page_swap_info(page)->flags) &&
+		!(page_swap_info(page)->flags & SWP_SYNCHRONOUS_IO))
+		return false;
+
+	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
+	if (kfifo_len(&pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(page) &&
+			unlikely(!kfifo_out(&pgdat->kcompress_fifo, &head, sizeof(page)))) {
+		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
+		return false;
+	}
+	spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
+
+	get_page(page);
+
+	ret = kfifo_in(&pgdat->kcompress_fifo, &page, sizeof(page));
+	if (likely(ret))
+		wake_up_interruptible(&pgdat->kcompressd_wait);
+	else
+		put_page(page);
+
+	if (head)
+		do_swapout(head);
+
+	return ret;
+}
+
+/*
+ * kcompressd() - Kernel thread for compressing pages asynchronously
+ */
+int kcompressd(void *p)
+{
+	pg_data_t *pgdat = (pg_data_t *)p;
+	struct page *page;
+
+	current->flags |= PF_MEMALLOC | PF_KSWAPD;
+
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(pgdat->kcompressd_wait,
+				!kfifo_is_empty(&pgdat->kcompress_fifo));
+
+		while (kfifo_out_locked(&pgdat->kcompress_fifo,
+				&page, sizeof(page), &pgdat->kcompress_fifo_lock))
+			do_swapout(page);
+	}
+	return 0;
 }
 
 static inline void count_swpout_vm_event(struct page *page)
