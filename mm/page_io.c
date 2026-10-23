@@ -278,8 +278,8 @@ static bool kcompressd_store(struct page *page)
 		return false;
 
 	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
-	if (kfifo_len(&pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(page) &&
-			unlikely(!kfifo_out(&pgdat->kcompress_fifo, &head, sizeof(page)))) {
+	if (kfifo_len((struct kfifo *)pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(page) &&
+			unlikely(!kfifo_out((struct kfifo *)pgdat->kcompress_fifo, &head, sizeof(page)))) {
 		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
 		return false;
 	}
@@ -287,7 +287,7 @@ static bool kcompressd_store(struct page *page)
 
 	get_page(page);
 
-	ret = kfifo_in(&pgdat->kcompress_fifo, &page, sizeof(page));
+	ret = kfifo_in((struct kfifo *)pgdat->kcompress_fifo, &page, sizeof(page));
 	if (likely(ret))
 		wake_up_interruptible(&pgdat->kcompressd_wait);
 	else
@@ -311,9 +311,9 @@ int kcompressd(void *p)
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(pgdat->kcompressd_wait,
-				!kfifo_is_empty(&pgdat->kcompress_fifo));
+				!kfifo_is_empty((struct kfifo *)pgdat->kcompress_fifo));
 
-		while (kfifo_out_locked(&pgdat->kcompress_fifo,
+		while (kfifo_out_locked((struct kfifo *)pgdat->kcompress_fifo,
 				&page, sizeof(page), &pgdat->kcompress_fifo_lock))
 			do_swapout(page);
 	}
