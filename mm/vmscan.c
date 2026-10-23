@@ -20,6 +20,9 @@
 #include <linux/gfp.h>
 #include <linux/kernel_stat.h>
 #include <linux/kfifo.h>
+#ifndef KCOMPRESS_FIFO_SIZE
+#define KCOMPRESS_FIFO_SIZE 256
+#endif
 #include <linux/swap.h>
 #include <linux/pagemap.h>
 #include <linux/init.h>
@@ -4922,9 +4925,13 @@ int kswapd_run(int nid)
 	/* kcompressd: async swapout offload */
 	{
 		int kret;
-		kret = kfifo_alloc((struct kfifo **)&pgdat->kcompress_fifo,
-				KCOMPRESS_FIFO_SIZE * sizeof(struct page *),
-				GFP_KERNEL);
+		{
+			struct kfifo *tmp_fifo;
+			kret = kfifo_alloc(&tmp_fifo,
+					KCOMPRESS_FIFO_SIZE * sizeof(struct page *),
+					GFP_KERNEL);
+			pgdat->kcompress_fifo = tmp_fifo;
+		}
 		if (kret) {
 			pr_err("kcompressd: kfifo_alloc failed\n");
 		} else {
