@@ -494,6 +494,14 @@ config TCP_CONG_BIC
 	  increase provides TCP friendliness.
 	  See http://www.csc.ncsu.edu/faculty/rhee/export/bitcp/
 
+
+config TCP_CONG_PIXIE
+	tristate "PIXIE TCP congestion control"
+	default y
+	help
+	  PIXIE is a TCP congestion control algorithm focused on
+	  maintaining throughput. To compile as module choose M: tcp_pixie.
+
 config TCP_CONG_CUBIC
 	tristate "CUBIC TCP"
 	default y
@@ -501,18 +509,6 @@ config TCP_CONG_CUBIC
 	  This is version 2.0 of BIC-TCP which uses a cubic growth function
 	  among other techniques.
 	  See http://www.csc.ncsu.edu/faculty/rhee/export/bitcp/cubic-paper.pdf
-
-config TCP_CONG_PIXIE
-	tristate "PIXIE TCP congestion control"
-	default y
-	---help---
-	  PIXIE is a TCP congestion control algorithm focused on
-	  maintaining throughput (effective bandwidth). It uses a
-	  sampling-based approach to adjust the congestion window.
-
-	  To compile this driver as a module, choose M here: the module
-	  will be called tcp_pixie.
-
 
 config TCP_CONG_WESTWOOD
 	tristate "TCP Westwood+"
