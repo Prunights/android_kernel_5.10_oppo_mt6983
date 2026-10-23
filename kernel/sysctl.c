@@ -2757,6 +2757,9 @@ static struct ctl_table kern_table[] = {
 	{ }
 };
 
+#ifndef KCOMPRESS_FIFO_SIZE
+#define KCOMPRESS_FIFO_SIZE 256
+#endif
 int vm_kcompressd = 24;
 static int SYSCTL_KCOMPRESS_FIFO_SIZE = KCOMPRESS_FIFO_SIZE;
 
