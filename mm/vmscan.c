@@ -4925,27 +4925,31 @@ int kswapd_run(int nid)
 	/* kcompressd: async swapout offload */
 	{
 		int kret;
-		{
-			struct kfifo *tmp_fifo;
-			kret = kfifo_alloc(&tmp_fifo,
+		struct kfifo *tmp_fifo;
+		tmp_fifo = kzalloc(sizeof(struct kfifo), GFP_KERNEL);
+		if (!tmp_fifo) {
+			pr_err("kcompressd: kzalloc failed\n");
+		} else {
+			kret = kfifo_alloc(tmp_fifo,
 					KCOMPRESS_FIFO_SIZE * sizeof(struct page *),
 					GFP_KERNEL);
 			pgdat->kcompress_fifo = tmp_fifo;
-		}
-		if (kret) {
-			pr_err("kcompressd: kfifo_alloc failed\n");
-		} else {
-			printk(KERN_INFO "Kcompressd 0.5 (ported to 5.10)\n");
-			spin_lock_init(&pgdat->kcompress_fifo_lock);
-			pgdat->kcompressd = kthread_run(kcompressd, pgdat,
-					"kcompressd%d", nid);
-			if (IS_ERR(pgdat->kcompressd)) {
-				pr_err("kcompressd: failed to start on node %d\n", nid);
-				pgdat->kcompressd = NULL;
-				{
-			struct kfifo *tmp = pgdat->kcompress_fifo;
-			if (tmp) kfifo_free(tmp);
-		}
+			if (kret) {
+				pr_err("kcompressd: kfifo_alloc failed\n");
+				kfree(tmp_fifo);
+				pgdat->kcompress_fifo = NULL;
+			} else {
+				printk(KERN_INFO "Kcompressd 0.5 (ported to 5.10)\n");
+				spin_lock_init(&pgdat->kcompress_fifo_lock);
+				pgdat->kcompressd = kthread_run(kcompressd, pgdat,
+						"kcompressd%d", nid);
+				if (IS_ERR(pgdat->kcompressd)) {
+					pr_err("kcompressd: failed to start on node %d\n", nid);
+					pgdat->kcompressd = NULL;
+					kfifo_free(tmp_fifo);
+					kfree(tmp_fifo);
+					pgdat->kcompress_fifo = NULL;
+				}
 			}
 		}
 	}
