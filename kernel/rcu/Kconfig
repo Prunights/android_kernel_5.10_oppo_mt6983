@@ -256,20 +256,3 @@ config TASKS_TRACE_RCU_READ_MB
 	  Take the default if you are unsure.
 
 endmenu # "RCU Subsystem"
-
-config RCU_LAZY
-	bool "Lazy RCU callback invocation"
-	default y
-	help
-	  Enable lazy RCU callback invocation to reduce power consumption
-	  under light load. Callbacks are deferred and batched rather than
-	  being invoked immediately.
-
-	  This can significantly reduce CPU wakeups and improve battery life.
-
-config RCU_LAZY_DEFAULT_OFF
-	bool "Disable RCU_LAZY by default"
-	depends on RCU_LAZY
-	default n
-	help
-	  Start with lazy RCU disabled at boot.
