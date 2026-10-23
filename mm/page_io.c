@@ -273,8 +273,8 @@ static bool kcompressd_store(struct page *page)
 		return false;
 
 	/* Swap device must be sync-efficient */
-	if (!swp_swap_info(page_swap_info(page)->flags) &&
-		!(page_swap_info(page)->flags & SWP_SYNCHRONOUS_IO))
+	if (!(swp_type(page_swap_entry(page)) < nr_swapfiles) ||
+		!((swp_swap_info(swp_type(page_swap_entry(page)))->flags) & SWP_SYNCHRONOUS_IO))
 		return false;
 
 	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
@@ -319,6 +319,9 @@ int kcompressd(void *p)
 	}
 	return 0;
 }
+
+extern int vm_kcompressd;
+static bool kcompressd_store(struct page *page);
 
 static inline void count_swpout_vm_event(struct page *page)
 {
