@@ -19,8 +19,9 @@
 
 #include <linux/cpumask.h>
 #include <linux/kfifo.h>
+#include <linux/frontswap.h>
 
-/* kcompressd - async swapout offload (ported from 6.12 kcompressd-unofficial 0.5) */
+/* kcompressd - async swapout offload */
 extern int vm_kcompressd;
 
 static void do_swapout(struct page *page)
@@ -44,6 +45,7 @@ static void do_swapout(struct page *page)
 static bool kcompressd_store(struct page *page)
 {
 	pg_data_t *pgdat = NODE_DATA(numa_node_id());
+	struct kfifo *fifo = pgdat->kcompress_fifo;
 	unsigned int ret;
 	struct page *head = NULL;
 
@@ -57,8 +59,8 @@ static bool kcompressd_store(struct page *page)
 		return false;
 
 	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
-	if (kfifo_len(pgdat->kcompress_fifo) >= vm_kcompressd * sizeof(page) &&
-			unlikely(!kfifo_out(pgdat->kcompress_fifo, &head, sizeof(page)))) {
+	if (kfifo_len(fifo) >= vm_kcompressd * sizeof(page) &&
+			unlikely(!kfifo_out(fifo, &head, sizeof(page)))) {
 		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
 		return false;
 	}
@@ -66,7 +68,7 @@ static bool kcompressd_store(struct page *page)
 
 	get_page(page);
 
-	ret = kfifo_in(pgdat->kcompress_fifo, &page, sizeof(page));
+	ret = kfifo_in(fifo, &page, sizeof(page));
 	if (likely(ret))
 		wake_up_interruptible(&pgdat->kcompressd_wait);
 	else
@@ -81,15 +83,16 @@ static bool kcompressd_store(struct page *page)
 int kcompressd(void *p)
 {
 	pg_data_t *pgdat = (pg_data_t *)p;
+	struct kfifo *fifo = pgdat->kcompress_fifo;
 	struct page *page;
 
 	current->flags |= PF_MEMALLOC | PF_KSWAPD;
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(pgdat->kcompressd_wait,
-				!kfifo_is_empty(pgdat->kcompress_fifo));
+				!kfifo_is_empty(fifo));
 
-		while (kfifo_out_locked(pgdat->kcompress_fifo,
+		while (kfifo_out_locked(fifo,
 				&page, sizeof(page), &pgdat->kcompress_fifo_lock))
 			do_swapout(page);
 	}
