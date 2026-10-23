@@ -16,6 +16,87 @@
 #include <linux/gfp.h>
 #include <linux/pagemap.h>
 #include <linux/swap.h>
+
+#include <linux/cpumask.h>
+#include <linux/kfifo.h>
+#include "swap.h"
+
+/* kcompressd - async swapout offload (ported from 6.12 kcompressd-unofficial 0.5) */
+extern int vm_kcompressd;
+
+static void do_swapout(struct page *page)
+{
+	struct writeback_control wbc = {
+		.sync_mode = WB_SYNC_NONE,
+		.nr_to_write = SWAP_CLUSTER_MAX,
+		.range_start = 0,
+		.range_end = LLONG_MAX,
+		.for_reclaim = 1,
+	};
+
+	if (frontswap_store(page) == 0) {
+		unlock_page(page);
+	} else
+		__swap_writepage(page, &wbc, end_swap_bio_write);
+
+	put_page(page);
+}
+
+static bool kcompressd_store(struct page *page)
+{
+	pg_data_t *pgdat = NODE_DATA(numa_node_id());
+	unsigned int ret;
+	struct page *head = NULL;
+
+	if (!current_is_kswapd())
+		return false;
+
+	if (!vm_kcompressd || unlikely(!pgdat->kcompressd))
+		return false;
+
+	if (!PageAnon(page))
+		return false;
+
+	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
+	if (kfifo_len(pgdat->kcompress_fifo) >= vm_kcompressd * sizeof(page) &&
+			unlikely(!kfifo_out(pgdat->kcompress_fifo, &head, sizeof(page)))) {
+		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
+		return false;
+	}
+	spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
+
+	get_page(page);
+
+	ret = kfifo_in(pgdat->kcompress_fifo, &page, sizeof(page));
+	if (likely(ret))
+		wake_up_interruptible(&pgdat->kcompressd_wait);
+	else
+		put_page(page);
+
+	if (head)
+		do_swapout(head);
+
+	return ret;
+}
+
+int kcompressd(void *p)
+{
+	pg_data_t *pgdat = (pg_data_t *)p;
+	struct page *page;
+
+	current->flags |= PF_MEMALLOC | PF_KSWAPD;
+
+	while (!kthread_should_stop()) {
+		wait_event_interruptible(pgdat->kcompressd_wait,
+				!kfifo_is_empty(pgdat->kcompress_fifo));
+
+		while (kfifo_out_locked(pgdat->kcompress_fifo,
+				&page, sizeof(page), &pgdat->kcompress_fifo_lock))
+			do_swapout(page);
+	}
+	return 0;
+}
+
 #include <linux/bio.h>
 #include <linux/swapops.h>
 #include <linux/buffer_head.h>
@@ -215,6 +296,10 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		unlock_page(page);
 		goto out;
 	}
+	/* async compression offload */
+	if (kcompressd_store(page))
+		return 0;
+
 	if (frontswap_store(page) == 0) {
 		set_page_writeback(page);
 		unlock_page(page);
@@ -297,10 +382,6 @@ int __swap_writepage(struct page *page, struct writeback_control *wbc,
 			set_page_dirty(page);
 			ClearPageReclaim(page);
 			pr_err_ratelimited("Write error on dio swapfile (%llu)\n",
-	/* async compression offload */
-	if (kcompressd_store(page))
-		return 0;
-
 					   page_file_offset(page));
 		}
 		end_page_writeback(page);
