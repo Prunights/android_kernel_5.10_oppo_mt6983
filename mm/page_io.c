@@ -19,7 +19,6 @@
 
 #include <linux/cpumask.h>
 #include <linux/kfifo.h>
-#include "swap.h"
 
 /* kcompressd - async swapout offload (ported from 6.12 kcompressd-unofficial 0.5) */
 extern int vm_kcompressd;
