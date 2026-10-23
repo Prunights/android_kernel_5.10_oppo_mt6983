@@ -19,7 +19,6 @@
 #include <linux/page-flags-layout.h>
 #include <linux/atomic.h>
 #include <linux/mm_types.h>
-#include <linux/kfifo.h>
 #include <linux/page-flags.h>
 #include <linux/android_kabi.h>
 #include <asm/page.h>
@@ -778,12 +777,6 @@ typedef struct pglist_data {
 	enum zone_type kswapd_highest_zoneidx;
 
 	int kswapd_failures;		/* Number of 'reclaimed == 0' runs */
-
-#define KCOMPRESS_FIFO_SIZE 256
-	wait_queue_head_t kcompressd_wait;
-	struct task_struct *kcompressd;
-	struct kfifo kcompress_fifo;
-	spinlock_t kcompress_fifo_lock;
 
 	ANDROID_OEM_DATA(1);
 #ifdef CONFIG_COMPACTION
