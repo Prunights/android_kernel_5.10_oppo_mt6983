@@ -4921,7 +4921,7 @@ int kswapd_run(int nid)
 	/* kcompressd: async swapout offload */
 	{
 		int kret;
-		kret = kfifo_alloc(&pgdat->kcompress_fifo,
+		kret = kfifo_alloc((struct kfifo **)&pgdat->kcompress_fifo,
 				KCOMPRESS_FIFO_SIZE * sizeof(struct page *),
 				GFP_KERNEL);
 		if (kret) {
@@ -4934,7 +4934,7 @@ int kswapd_run(int nid)
 			if (IS_ERR(pgdat->kcompressd)) {
 				pr_err("kcompressd: failed to start on node %d\n", nid);
 				pgdat->kcompressd = NULL;
-				kfifo_free(&pgdat->kcompress_fifo);
+				kfifo_free((struct kfifo *)pgdat->kcompress_fifo);
 			}
 		}
 	}
