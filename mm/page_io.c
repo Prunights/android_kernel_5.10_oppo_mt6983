@@ -215,6 +215,7 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 		unlock_page(page);
 		goto out;
 	}
+	/* async compression offload */
 	if (kcompressd_store(page))
 		return 0;
 
@@ -231,9 +232,11 @@ out:
 
 
 /*
- * do_swapout() - Write a page to swap space (kcompressd helper)
+ * kcompressd - async swapout offload (ported from 6.12 kcompressd-unofficial 0.5)
  */
-static inline void do_swapout(struct page *page)
+extern int vm_kcompressd;
+
+static void do_swapout(struct page *page)
 {
 	struct writeback_control wbc = {
 		.sync_mode = WB_SYNC_NONE,
@@ -251,34 +254,23 @@ static inline void do_swapout(struct page *page)
 	put_page(page);
 }
 
-/*
- * kcompressd_store() - Off-load page compression to kcompressd
- */
 static bool kcompressd_store(struct page *page)
 {
 	pg_data_t *pgdat = NODE_DATA(numa_node_id());
 	unsigned int ret;
-	int sysctl_kcompressd = vm_kcompressd;
 	struct page *head = NULL;
 
-	/* Only kswapd can use kcompressd */
 	if (!current_is_kswapd())
 		return false;
 
-	if (!sysctl_kcompressd || unlikely(!pgdat->kcompressd))
+	if (!vm_kcompressd || unlikely(!pgdat->kcompressd))
 		return false;
 
-	/* Only anon pages */
 	if (!PageAnon(page))
 		return false;
 
-	/* Swap device must be sync-efficient */
-	if (!(swp_type(page_swap_entry(page)) < nr_swapfiles) ||
-		!((swp_swap_info(swp_type(page_swap_entry(page)))->flags) & SWP_SYNCHRONOUS_IO))
-		return false;
-
 	spin_lock_irqsave(&pgdat->kcompress_fifo_lock, ret);
-	if (kfifo_len(pgdat->kcompress_fifo) >= sysctl_kcompressd * sizeof(page) &&
+	if (kfifo_len(pgdat->kcompress_fifo) >= vm_kcompressd * sizeof(page) &&
 			unlikely(!kfifo_out(pgdat->kcompress_fifo, &head, sizeof(page)))) {
 		spin_unlock_irqrestore(&pgdat->kcompress_fifo_lock, ret);
 		return false;
@@ -299,9 +291,6 @@ static bool kcompressd_store(struct page *page)
 	return ret;
 }
 
-/*
- * kcompressd() - Kernel thread for compressing pages asynchronously
- */
 int kcompressd(void *p)
 {
 	pg_data_t *pgdat = (pg_data_t *)p;
@@ -320,8 +309,7 @@ int kcompressd(void *p)
 	return 0;
 }
 
-extern int vm_kcompressd;
-static bool kcompressd_store(struct page *page);
+
 
 static inline void count_swpout_vm_event(struct page *page)
 {
