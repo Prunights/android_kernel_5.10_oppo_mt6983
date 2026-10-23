@@ -778,6 +778,12 @@ typedef struct pglist_data {
 
 	int kswapd_failures;		/* Number of 'reclaimed == 0' runs */
 
+	/* kcompressd: async swapout offload */
+	wait_queue_head_t kcompressd_wait;
+	struct task_struct *kcompressd;
+	void *kcompress_fifo;		/* struct kfifo * */
+	spinlock_t kcompress_fifo_lock;
+
 	ANDROID_OEM_DATA(1);
 #ifdef CONFIG_COMPACTION
 	int kcompactd_max_order;
