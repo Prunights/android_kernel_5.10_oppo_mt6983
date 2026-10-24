@@ -668,5 +668,3 @@ struct migration_target_control {
 	gfp_t gfp_mask;
 };
 #endif	/* __MM_INTERNAL_H */
-
-int kcompressd(void *p);
