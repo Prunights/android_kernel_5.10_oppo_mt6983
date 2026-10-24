@@ -53,3 +53,9 @@ config BFQ_CGROUP_DEBUG
 endmenu
 
 endif
+
+config MQ_IOSCHED_SSG
+	tristate "Samsung SSG I/O scheduler"
+	default y
+	help
+	  Samsung SSG I/O scheduler optimized for flash storage.
