@@ -2757,12 +2757,6 @@ static struct ctl_table kern_table[] = {
 	{ }
 };
 
-#ifndef KCOMPRESS_FIFO_SIZE
-#define KCOMPRESS_FIFO_SIZE 256
-#endif
-int vm_kcompressd = 24;
-static int SYSCTL_KCOMPRESS_FIFO_SIZE = KCOMPRESS_FIFO_SIZE;
-
 static struct ctl_table vm_table[] = {
 	{
 		.procname	= "overcommit_memory",
@@ -2883,16 +2877,6 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO_HUNDRED,
-	},
-
-	{
-		.procname	= "kcompressd",
-		.data		= &vm_kcompressd,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler = proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= &SYSCTL_KCOMPRESS_FIFO_SIZE,
 	},
 #ifdef CONFIG_NUMA
 	{
@@ -3201,27 +3185,6 @@ static struct ctl_table vm_table[] = {
 		.extra2		= SYSCTL_ONE,
 	},
 #endif
-	{
-		.procname	= "anon_min_kbytes",
-		.data		= &sysctl_anon_min_kbytes,
-		.maxlen		= sizeof(unsigned long),
-		.mode		= 0644,
-		.proc_handler	= proc_doulongvec_minmax,
-	},
-	{
-		.procname	= "clean_low_kbytes",
-		.data		= &sysctl_clean_low_kbytes,
-		.maxlen		= sizeof(unsigned long),
-		.mode		= 0644,
-		.proc_handler	= proc_doulongvec_minmax,
-	},
-	{
-		.procname	= "clean_min_kbytes",
-		.data		= &sysctl_clean_min_kbytes,
-		.maxlen		= sizeof(unsigned long),
-		.mode		= 0644,
-		.proc_handler	= proc_doulongvec_minmax,
-	},
 	{
 		.procname	= "user_reserve_kbytes",
 		.data		= &sysctl_user_reserve_kbytes,
